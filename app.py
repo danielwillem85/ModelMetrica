@@ -11,11 +11,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from flask import Flask, render_template_string, request, session
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
+from sklearn.linear_model import Lasso, Ridge
 from sklearn.metrics import accuracy_score
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
+from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 
@@ -350,6 +356,18 @@ PAGE_TEMPLATE = """
               <input type="hidden" name="form_name" value="regression">
               <input type="hidden" name="active_tab" value="regression">
               <div>
+                <label for="regression_model">Model type</label>
+                <select id="regression_model" name="regression_model" required>
+                  <option value="linear" {{ 'selected' if selected_regression_model == 'linear' else '' }}>Linear Regression</option>
+                  <option value="ridge" {{ 'selected' if selected_regression_model == 'ridge' else '' }}>Ridge Regression</option>
+                  <option value="lasso" {{ 'selected' if selected_regression_model == 'lasso' else '' }}>Lasso Regression</option>
+                  <option value="random_forest" {{ 'selected' if selected_regression_model == 'random_forest' else '' }}>Random Forest Regression</option>
+                  <option value="gradient_boosting" {{ 'selected' if selected_regression_model == 'gradient_boosting' else '' }}>Gradient Boosting Regression</option>
+                  <option value="svr" {{ 'selected' if selected_regression_model == 'svr' else '' }}>Support Vector Regression</option>
+                  <option value="knn" {{ 'selected' if selected_regression_model == 'knn' else '' }}>kNN Regression</option>
+                </select>
+              </div>
+              <div>
                 <label for="regression_target">Numeric target column</label>
                 <select id="regression_target" name="regression_target" required>
                   {% for column in columns %}
@@ -378,24 +396,31 @@ PAGE_TEMPLATE = """
 
         {% if regression_output %}
           <div class="panel">
-            <h2>Linear regression results</h2>
-            <p>Target: {{ regression_output.target }}.</p>
+            <h2>{{ regression_output.title }}</h2>
+            <p>{{ regression_output.description }}</p>
             <div class="metric-row">
-              <div class="metric"><span>Observations</span><strong>{{ regression_output.nobs }}</strong></div>
-              <div class="metric"><span>R squared</span><strong>{{ regression_output.r_squared }}</strong></div>
-              <div class="metric"><span>Adj. R squared</span><strong>{{ regression_output.adj_r_squared }}</strong></div>
-              <div class="metric"><span>RMSE</span><strong>{{ regression_output.rmse }}</strong></div>
+              {% for metric in regression_output.metrics %}
+                <div class="metric"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
+              {% endfor %}
             </div>
-            <div class="metric-row">
-              <div class="metric"><span>Residual SE</span><strong>{{ regression_output.residual_se }}</strong></div>
-              <div class="metric"><span>F statistic</span><strong>{{ regression_output.f_statistic }}</strong></div>
-              <div class="metric"><span>Model df</span><strong>{{ regression_output.model_df }}</strong></div>
-              <div class="metric"><span>Residual df</span><strong>{{ regression_output.residual_df }}</strong></div>
-            </div>
-            <h3>Coefficients</h3>
-            <div class="table-wrap">
-              {{ regression_output.coefficients_html|safe }}
-            </div>
+            {% if regression_output.coefficients_html %}
+              <h3>Coefficients</h3>
+              <div class="table-wrap">
+                {{ regression_output.coefficients_html|safe }}
+              </div>
+            {% endif %}
+            {% if regression_output.importances_html %}
+              <h3>Variable importance</h3>
+              <div class="table-wrap">
+                {{ regression_output.importances_html|safe }}
+              </div>
+            {% endif %}
+            {% if regression_output.details_html %}
+              <h3>Model details</h3>
+              <div class="table-wrap">
+                {{ regression_output.details_html|safe }}
+              </div>
+            {% endif %}
           </div>
         {% endif %}
       </section>
@@ -826,6 +851,60 @@ def fit_knn_model(data, target, predictors):
     }
 
 
+def prepare_regression_data(data, target, predictors):
+    if target in predictors:
+        raise ValueError("The target column cannot also be used as a predictor.")
+
+    selected = [target] + predictors
+    model_data = data[selected].dropna()
+    if len(model_data) < 3:
+        raise ValueError("At least three complete rows are required.")
+
+    y_series = pd.to_numeric(model_data[target], errors="coerce")
+    model_data = model_data.loc[y_series.notna()].copy()
+    y = y_series.loc[y_series.notna()].to_numpy(dtype=float)
+    if len(y) < 3:
+        raise ValueError("The regression target must contain at least three numeric values.")
+
+    x_encoded = pd.get_dummies(model_data[predictors], drop_first=True, dtype=float)
+    if x_encoded.empty:
+        raise ValueError("At least one usable predictor is required.")
+
+    return y, x_encoded
+
+
+def regression_metric_list(y, predictions, parameter_count=None):
+    residuals = y - predictions
+    sse = float(np.sum(residuals**2))
+    tss = float(np.sum((y - np.mean(y)) ** 2))
+    r_squared = 1 - (sse / tss) if tss > 0 else 0.0
+    rmse = math.sqrt(sse / len(y))
+    mae = float(np.mean(np.abs(residuals)))
+    metrics = [
+        {"label": "Observations", "value": len(y)},
+        {"label": "R squared", "value": f"{r_squared:.3f}"},
+        {"label": "RMSE", "value": f"{rmse:.3f}"},
+        {"label": "MAE", "value": f"{mae:.3f}"},
+    ]
+
+    if parameter_count is not None and len(y) > parameter_count:
+        residual_df = len(y) - parameter_count
+        adj_r_squared = 1 - ((1 - r_squared) * (len(y) - 1) / residual_df)
+        metrics.append({"label": "Adj. R squared", "value": f"{adj_r_squared:.3f}"})
+
+    return metrics
+
+
+def regression_coefficient_table(feature_names, coefficients):
+    coefficients = pd.DataFrame(
+        {
+            "Term": feature_names,
+            "Coefficient": coefficients,
+        }
+    )
+    return coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format)
+
+
 def fit_linear_regression(data, target, predictors):
     if target in predictors:
         raise ValueError("The target column cannot also be used as a predictor.")
@@ -884,16 +963,181 @@ def fit_linear_regression(data, target, predictors):
     )
 
     return {
+        "title": "Linear Regression results",
+        "description": f"Target: {target}. Ordinary least squares fit.",
         "target": target,
-        "nobs": nobs,
-        "r_squared": f"{r_squared:.3f}",
-        "adj_r_squared": f"{adj_r_squared:.3f}",
-        "rmse": f"{rmse:.3f}",
-        "residual_se": f"{residual_se:.3f}",
-        "f_statistic": f"{f_statistic:.3f}",
-        "model_df": predictor_df,
-        "residual_df": residual_df,
+        "metrics": [
+            {"label": "Observations", "value": nobs},
+            {"label": "R squared", "value": f"{r_squared:.3f}"},
+            {"label": "Adj. R squared", "value": f"{adj_r_squared:.3f}"},
+            {"label": "RMSE", "value": f"{rmse:.3f}"},
+            {"label": "Residual SE", "value": f"{residual_se:.3f}"},
+            {"label": "F statistic", "value": f"{f_statistic:.3f}"},
+        ],
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
+        "importances_html": None,
+        "details_html": details_table({
+            "Model": "Ordinary least squares",
+            "Model df": predictor_df,
+            "Residual df": residual_df,
+        }),
+    }
+
+
+def fit_ridge_regression(data, target, predictors):
+    y, x_encoded = prepare_regression_data(data, target, predictors)
+    scaler = StandardScaler()
+    scaled_x = scaler.fit_transform(x_encoded)
+    model = Ridge(alpha=1.0)
+    model.fit(scaled_x, y)
+    predictions = model.predict(scaled_x)
+
+    return {
+        "title": "Ridge Regression results",
+        "description": f"Target: {target}. Predictors were standardized before fitting.",
+        "target": target,
+        "metrics": regression_metric_list(y, predictions, parameter_count=scaled_x.shape[1] + 1),
+        "coefficients_html": regression_coefficient_table(["Intercept"] + list(x_encoded.columns), [model.intercept_] + list(model.coef_)),
+        "importances_html": None,
+        "details_html": details_table({
+            "Model": "Ridge",
+            "Alpha": model.alpha,
+            "Feature scaling": "StandardScaler",
+        }),
+    }
+
+
+def fit_lasso_regression(data, target, predictors):
+    y, x_encoded = prepare_regression_data(data, target, predictors)
+    scaler = StandardScaler()
+    scaled_x = scaler.fit_transform(x_encoded)
+    model = Lasso(alpha=0.1, max_iter=10000, random_state=42)
+    model.fit(scaled_x, y)
+    predictions = model.predict(scaled_x)
+    nonzero_count = int(np.sum(np.abs(model.coef_) > 1e-8))
+
+    return {
+        "title": "Lasso Regression results",
+        "description": f"Target: {target}. Predictors were standardized before fitting.",
+        "target": target,
+        "metrics": regression_metric_list(y, predictions, parameter_count=nonzero_count + 1),
+        "coefficients_html": regression_coefficient_table(["Intercept"] + list(x_encoded.columns), [model.intercept_] + list(model.coef_)),
+        "importances_html": None,
+        "details_html": details_table({
+            "Model": "Lasso",
+            "Alpha": model.alpha,
+            "Non-zero coefficients": nonzero_count,
+            "Feature scaling": "StandardScaler",
+        }),
+    }
+
+
+def fit_random_forest_regression(data, target, predictors):
+    y, x_encoded = prepare_regression_data(data, target, predictors)
+    min_samples_leaf = max(1, int(len(y) * 0.01))
+    model = RandomForestRegressor(
+        n_estimators=200,
+        min_samples_leaf=min_samples_leaf,
+        random_state=42,
+        n_jobs=-1,
+    )
+    model.fit(x_encoded, y)
+    predictions = model.predict(x_encoded)
+
+    return {
+        "title": "Random Forest Regression results",
+        "description": f"Target: {target}. Ensemble of regression trees.",
+        "target": target,
+        "metrics": regression_metric_list(y, predictions),
+        "coefficients_html": None,
+        "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
+        "details_html": details_table({
+            "Model": "RandomForestRegressor",
+            "Trees": model.n_estimators,
+            "Minimum samples per leaf": min_samples_leaf,
+            "Random seed": 42,
+        }),
+    }
+
+
+def fit_gradient_boosting_regression(data, target, predictors):
+    y, x_encoded = prepare_regression_data(data, target, predictors)
+    model = GradientBoostingRegressor(
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=3,
+        random_state=42,
+    )
+    model.fit(x_encoded, y)
+    predictions = model.predict(x_encoded)
+
+    return {
+        "title": "Gradient Boosting Regression results",
+        "description": f"Target: {target}. Sequential boosted-tree regression model.",
+        "target": target,
+        "metrics": regression_metric_list(y, predictions),
+        "coefficients_html": None,
+        "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
+        "details_html": details_table({
+            "Model": "GradientBoostingRegressor",
+            "Boosting stages": model.n_estimators,
+            "Learning rate": model.learning_rate,
+            "Maximum tree depth": model.max_depth,
+            "Random seed": 42,
+        }),
+    }
+
+
+def fit_svr_regression(data, target, predictors):
+    y, x_encoded = prepare_regression_data(data, target, predictors)
+    scaler = StandardScaler()
+    scaled_x = scaler.fit_transform(x_encoded)
+    model = SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale")
+    model.fit(scaled_x, y)
+    predictions = model.predict(scaled_x)
+
+    return {
+        "title": "Support Vector Regression results",
+        "description": f"Target: {target}. Predictors were standardized before fitting.",
+        "target": target,
+        "metrics": regression_metric_list(y, predictions),
+        "coefficients_html": None,
+        "importances_html": None,
+        "details_html": details_table({
+            "Model": "SVR",
+            "Kernel": model.kernel,
+            "C": model.C,
+            "Epsilon": model.epsilon,
+            "Gamma": model.gamma,
+            "Support vectors": len(model.support_),
+            "Feature scaling": "StandardScaler",
+        }),
+    }
+
+
+def fit_knn_regression(data, target, predictors):
+    y, x_encoded = prepare_regression_data(data, target, predictors)
+    scaler = StandardScaler()
+    scaled_x = scaler.fit_transform(x_encoded)
+    neighbors = min(5, len(y))
+    model = KNeighborsRegressor(n_neighbors=neighbors, weights="distance")
+    model.fit(scaled_x, y)
+    predictions = model.predict(scaled_x)
+
+    return {
+        "title": "kNN Regression results",
+        "description": f"Target: {target}. Predictors were standardized before fitting.",
+        "target": target,
+        "metrics": regression_metric_list(y, predictions),
+        "coefficients_html": None,
+        "importances_html": None,
+        "details_html": details_table({
+            "Model": "KNeighborsRegressor",
+            "Neighbors": neighbors,
+            "Weights": model.weights,
+            "Distance metric": model.metric,
+            "Feature scaling": "StandardScaler",
+        }),
     }
 
 
@@ -906,6 +1150,7 @@ def index():
     model_output = None
     regression_output = None
     selected_classification_model = "logistic"
+    selected_regression_model = "linear"
     selected_target = None
     selected_predictors = []
     selected_regression_target = None
@@ -956,6 +1201,7 @@ def index():
 
     if request.method == "POST" and request.form.get("form_name") == "regression":
         active_tab = "regression"
+        selected_regression_model = request.form.get("regression_model", "linear")
         selected_regression_target = request.form.get("regression_target")
         selected_regression_predictors = request.form.getlist("regression_predictors")
 
@@ -965,11 +1211,17 @@ def index():
             regression_error = "Select a target column and at least one predictor."
         else:
             try:
-                regression_output = fit_linear_regression(
-                    dataset["data"],
-                    selected_regression_target,
-                    selected_regression_predictors,
-                )
+                regression_models = {
+                    "linear": fit_linear_regression,
+                    "ridge": fit_ridge_regression,
+                    "lasso": fit_lasso_regression,
+                    "random_forest": fit_random_forest_regression,
+                    "gradient_boosting": fit_gradient_boosting_regression,
+                    "svr": fit_svr_regression,
+                    "knn": fit_knn_regression,
+                }
+                fit_model = regression_models.get(selected_regression_model, fit_linear_regression)
+                regression_output = fit_model(dataset["data"], selected_regression_target, selected_regression_predictors)
             except Exception as exc:
                 regression_error = str(exc)
 
@@ -1010,6 +1262,7 @@ def index():
         selected_classification_model=selected_classification_model,
         selected_target=selected_target,
         selected_predictors=selected_predictors,
+        selected_regression_model=selected_regression_model,
         selected_regression_target=selected_regression_target,
         selected_regression_predictors=selected_regression_predictors,
         model_output=model_output,
