@@ -11,7 +11,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from flask import Flask, render_template_string, request, session
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.metrics import accuracy_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 
@@ -263,6 +267,10 @@ PAGE_TEMPLATE = """
                 <select id="classification_model" name="classification_model" required>
                   <option value="logistic" {{ 'selected' if selected_classification_model == 'logistic' else '' }}>Logistic regression</option>
                   <option value="tree" {{ 'selected' if selected_classification_model == 'tree' else '' }}>Tree model</option>
+                  <option value="random_forest" {{ 'selected' if selected_classification_model == 'random_forest' else '' }}>Random Forest</option>
+                  <option value="gradient_boosting" {{ 'selected' if selected_classification_model == 'gradient_boosting' else '' }}>Gradient Boosting</option>
+                  <option value="svm" {{ 'selected' if selected_classification_model == 'svm' else '' }}>Support Vector Machine</option>
+                  <option value="knn" {{ 'selected' if selected_classification_model == 'knn' else '' }}>kNN</option>
                 </select>
               </div>
               <div>
@@ -311,6 +319,12 @@ PAGE_TEMPLATE = """
               <h3>Variable importance</h3>
               <div class="table-wrap">
                 {{ model_output.importances_html|safe }}
+              </div>
+            {% endif %}
+            {% if model_output.details_html %}
+              <h3>Model details</h3>
+              <div class="table-wrap">
+                {{ model_output.details_html|safe }}
               </div>
             {% endif %}
             <h3>Confusion matrix</h3>
@@ -484,6 +498,62 @@ def prepare_classification_data(data, target, predictors, binary_only):
     return model_data, target_values, classes, x_encoded
 
 
+def encode_target(target_values):
+    encoded_target = pd.Categorical(target_values)
+    return encoded_target.codes, encoded_target.categories
+
+
+def confusion_table(actual, predicted):
+    return pd.crosstab(
+        pd.Series(actual, name="Actual"),
+        pd.Series(predicted, name="Predicted"),
+        dropna=False,
+    )
+
+
+def details_table(details):
+    return pd.DataFrame(
+        [{"Setting": key, "Value": value} for key, value in details.items()]
+    ).to_html(index=False, border=0, classes="model-details")
+
+
+def importance_table(feature_names, importances):
+    importances = pd.DataFrame(
+        {
+            "Predictor": feature_names,
+            "Importance": importances,
+        }
+    )
+    importances = importances.sort_values("Importance", ascending=False)
+    importances = importances[importances["Importance"] > 0]
+    if importances.empty:
+        importances = pd.DataFrame({"Predictor": ["None"], "Importance": [0.0]})
+    return importances.to_html(index=False, border=0, classes="importances", float_format="{:.4f}".format)
+
+
+def tree_plot_image(tree, feature_names, class_names):
+    fig_width = max(11, min(22, len(feature_names) * 1.8))
+    fig_height = max(6, min(14, tree.get_depth() * 2.6 + 2))
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    plot_tree(
+        tree,
+        feature_names=list(feature_names),
+        class_names=[str(class_name) for class_name in class_names],
+        filled=True,
+        rounded=True,
+        impurity=True,
+        proportion=True,
+        fontsize=8,
+        ax=ax,
+    )
+    ax.set_title("Classification tree")
+    buffer = BytesIO()
+    fig.tight_layout()
+    fig.savefig(buffer, format="png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 def fit_logistic_regression(data, target, predictors):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True)
     y = (target_values == classes[1]).astype(float).to_numpy()
@@ -556,6 +626,7 @@ def fit_logistic_regression(data, target, predictors):
         ],
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
+        "details_html": details_table({"Model": "Logistic regression", "Decision threshold": "0.5"}),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
     }
@@ -563,9 +634,7 @@ def fit_logistic_regression(data, target, predictors):
 
 def fit_tree_model(data, target, predictors):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    encoded_target = pd.Categorical(target_values)
-    y = encoded_target.codes
-    class_names = [str(value) for value in encoded_target.categories]
+    y, class_names = encode_target(target_values)
     min_samples_leaf = max(1, int(len(y) * 0.02))
 
     tree = DecisionTreeClassifier(
@@ -575,46 +644,11 @@ def fit_tree_model(data, target, predictors):
     )
     tree.fit(x_encoded, y)
     predicted_codes = tree.predict(x_encoded)
-    predicted_labels = encoded_target.categories[predicted_codes]
+    predicted_labels = class_names[predicted_codes]
     accuracy = accuracy_score(target_values, predicted_labels)
 
-    confusion = pd.crosstab(
-        pd.Series(target_values.to_numpy(), name="Actual"),
-        pd.Series(predicted_labels, name="Predicted"),
-        dropna=False,
-    )
-
-    importances = pd.DataFrame(
-        {
-            "Predictor": x_encoded.columns,
-            "Importance": tree.feature_importances_,
-        }
-    )
-    importances = importances.sort_values("Importance", ascending=False)
-    importances = importances[importances["Importance"] > 0]
-    if importances.empty:
-        importances = pd.DataFrame({"Predictor": ["None"], "Importance": [0.0]})
-
-    fig_width = max(11, min(20, len(x_encoded.columns) * 1.8))
-    fig_height = max(6, min(14, tree.get_depth() * 2.6 + 2))
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-    plot_tree(
-        tree,
-        feature_names=list(x_encoded.columns),
-        class_names=class_names,
-        filled=True,
-        rounded=True,
-        impurity=True,
-        proportion=True,
-        fontsize=8,
-        ax=ax,
-    )
-    ax.set_title("Classification tree")
-    buffer = BytesIO()
-    fig.tight_layout()
-    fig.savefig(buffer, format="png", dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    tree_plot = base64.b64encode(buffer.getvalue()).decode("ascii")
+    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+    tree_plot = tree_plot_image(tree, x_encoded.columns, class_names)
 
     return {
         "title": "Tree model results",
@@ -629,9 +663,166 @@ def fit_tree_model(data, target, predictors):
             {"label": "Terminal nodes", "value": tree.get_n_leaves()},
         ],
         "coefficients_html": None,
-        "importances_html": importances.to_html(index=False, border=0, classes="importances", float_format="{:.4f}".format),
+        "importances_html": importance_table(x_encoded.columns, tree.feature_importances_),
+        "details_html": details_table({
+            "Model": "Decision tree classifier",
+            "Max depth": tree.max_depth,
+            "Minimum samples per leaf": min_samples_leaf,
+        }),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": tree_plot,
+    }
+
+
+def fit_random_forest_model(data, target, predictors):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
+    y, class_names = encode_target(target_values)
+    min_samples_leaf = max(1, int(len(y) * 0.01))
+    model = RandomForestClassifier(
+        n_estimators=200,
+        min_samples_leaf=min_samples_leaf,
+        random_state=42,
+        n_jobs=-1,
+    )
+    model.fit(x_encoded, y)
+    predicted_labels = class_names[model.predict(x_encoded)]
+    accuracy = accuracy_score(target_values, predicted_labels)
+    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+
+    return {
+        "title": "Random Forest results",
+        "description": f"Target: {target}. Classes: {', '.join(str(value) for value in classes)}.",
+        "target": target,
+        "positive_class": None,
+        "nobs": len(y),
+        "metrics": [
+            {"label": "Observations", "value": len(y)},
+            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Trees", "value": model.n_estimators},
+            {"label": "Classes", "value": len(class_names)},
+        ],
+        "coefficients_html": None,
+        "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
+        "details_html": details_table({
+            "Model": "RandomForestClassifier",
+            "Trees": model.n_estimators,
+            "Minimum samples per leaf": min_samples_leaf,
+            "Random seed": 42,
+        }),
+        "confusion_html": confusion.to_html(border=0, classes="confusion"),
+        "tree_plot": None,
+    }
+
+
+def fit_gradient_boosting_model(data, target, predictors):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
+    y, class_names = encode_target(target_values)
+    model = GradientBoostingClassifier(
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=3,
+        random_state=42,
+    )
+    model.fit(x_encoded, y)
+    predicted_labels = class_names[model.predict(x_encoded)]
+    accuracy = accuracy_score(target_values, predicted_labels)
+    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+
+    return {
+        "title": "Gradient Boosting results",
+        "description": f"Target: {target}. Classes: {', '.join(str(value) for value in classes)}.",
+        "target": target,
+        "positive_class": None,
+        "nobs": len(y),
+        "metrics": [
+            {"label": "Observations", "value": len(y)},
+            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Boosting stages", "value": model.n_estimators},
+            {"label": "Learning rate", "value": model.learning_rate},
+        ],
+        "coefficients_html": None,
+        "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
+        "details_html": details_table({
+            "Model": "GradientBoostingClassifier",
+            "Boosting stages": model.n_estimators,
+            "Learning rate": model.learning_rate,
+            "Maximum tree depth": model.max_depth,
+            "Random seed": 42,
+        }),
+        "confusion_html": confusion.to_html(border=0, classes="confusion"),
+        "tree_plot": None,
+    }
+
+
+def fit_svm_model(data, target, predictors):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
+    y, class_names = encode_target(target_values)
+    scaled_x = StandardScaler().fit_transform(x_encoded)
+    model = SVC(kernel="rbf", C=1.0, gamma="scale", random_state=42)
+    model.fit(scaled_x, y)
+    predicted_labels = class_names[model.predict(scaled_x)]
+    accuracy = accuracy_score(target_values, predicted_labels)
+    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+
+    return {
+        "title": "Support Vector Machine results",
+        "description": f"Target: {target}. Features were standardized before fitting.",
+        "target": target,
+        "positive_class": None,
+        "nobs": len(y),
+        "metrics": [
+            {"label": "Observations", "value": len(y)},
+            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Kernel", "value": model.kernel},
+            {"label": "Support vectors", "value": int(np.sum(model.n_support_))},
+        ],
+        "coefficients_html": None,
+        "importances_html": None,
+        "details_html": details_table({
+            "Model": "SVC",
+            "Kernel": model.kernel,
+            "C": model.C,
+            "Gamma": model.gamma,
+            "Support vectors by class": ", ".join(str(value) for value in model.n_support_),
+        }),
+        "confusion_html": confusion.to_html(border=0, classes="confusion"),
+        "tree_plot": None,
+    }
+
+
+def fit_knn_model(data, target, predictors):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
+    y, class_names = encode_target(target_values)
+    scaled_x = StandardScaler().fit_transform(x_encoded)
+    neighbors = min(5, len(y))
+    model = KNeighborsClassifier(n_neighbors=neighbors, weights="distance")
+    model.fit(scaled_x, y)
+    predicted_labels = class_names[model.predict(scaled_x)]
+    accuracy = accuracy_score(target_values, predicted_labels)
+    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+
+    return {
+        "title": "kNN results",
+        "description": f"Target: {target}. Features were standardized before fitting.",
+        "target": target,
+        "positive_class": None,
+        "nobs": len(y),
+        "metrics": [
+            {"label": "Observations", "value": len(y)},
+            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Neighbors", "value": neighbors},
+            {"label": "Weights", "value": model.weights},
+        ],
+        "coefficients_html": None,
+        "importances_html": None,
+        "details_html": details_table({
+            "Model": "KNeighborsClassifier",
+            "Neighbors": neighbors,
+            "Weights": model.weights,
+            "Distance metric": model.metric,
+        }),
+        "confusion_html": confusion.to_html(border=0, classes="confusion"),
+        "tree_plot": None,
     }
 
 
@@ -750,10 +941,16 @@ def index():
             classification_error = "Select a target column and at least one predictor."
         else:
             try:
-                if selected_classification_model == "tree":
-                    model_output = fit_tree_model(dataset["data"], selected_target, selected_predictors)
-                else:
-                    model_output = fit_logistic_regression(dataset["data"], selected_target, selected_predictors)
+                classification_models = {
+                    "logistic": fit_logistic_regression,
+                    "tree": fit_tree_model,
+                    "random_forest": fit_random_forest_model,
+                    "gradient_boosting": fit_gradient_boosting_model,
+                    "svm": fit_svm_model,
+                    "knn": fit_knn_model,
+                }
+                fit_model = classification_models.get(selected_classification_model, fit_logistic_regression)
+                model_output = fit_model(dataset["data"], selected_target, selected_predictors)
             except Exception as exc:
                 classification_error = str(exc)
 
