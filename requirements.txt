@@ -1,0 +1,6 @@
+Flask
+pandas
+openpyxl
+xlrd
+scikit-learn
+matplotlib
