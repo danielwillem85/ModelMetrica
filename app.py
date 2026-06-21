@@ -19,6 +19,7 @@ from sklearn.ensemble import (
 )
 from sklearn.linear_model import Lasso, Ridge
 from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
@@ -297,6 +298,15 @@ PAGE_TEMPLATE = """
                 <p>Select one or more predictors. Logistic regression requires exactly two target classes.</p>
               </div>
               <div>
+                <label for="classification_test_size">Test set size</label>
+                <select id="classification_test_size" name="classification_test_size" required>
+                  <option value="0.2" {{ 'selected' if selected_classification_test_size == 0.2 else '' }}>20%</option>
+                  <option value="0.25" {{ 'selected' if selected_classification_test_size == 0.25 else '' }}>25%</option>
+                  <option value="0.3" {{ 'selected' if selected_classification_test_size == 0.3 else '' }}>30%</option>
+                  <option value="0.4" {{ 'selected' if selected_classification_test_size == 0.4 else '' }}>40%</option>
+                </select>
+              </div>
+              <div>
                 <button type="submit">Run</button>
               </div>
             </form>
@@ -383,6 +393,15 @@ PAGE_TEMPLATE = """
                   {% endfor %}
                 </select>
                 <p>Select one or more predictors. Categorical predictors are automatically encoded.</p>
+              </div>
+              <div>
+                <label for="regression_test_size">Test set size</label>
+                <select id="regression_test_size" name="regression_test_size" required>
+                  <option value="0.2" {{ 'selected' if selected_regression_test_size == 0.2 else '' }}>20%</option>
+                  <option value="0.25" {{ 'selected' if selected_regression_test_size == 0.25 else '' }}>25%</option>
+                  <option value="0.3" {{ 'selected' if selected_regression_test_size == 0.3 else '' }}>30%</option>
+                  <option value="0.4" {{ 'selected' if selected_regression_test_size == 0.4 else '' }}>40%</option>
+                </select>
               </div>
               <div>
                 <button type="submit">Run</button>
@@ -523,9 +542,47 @@ def prepare_classification_data(data, target, predictors, binary_only):
     return model_data, target_values, classes, x_encoded
 
 
+def parse_test_size(value):
+    try:
+        test_size = float(value)
+    except (TypeError, ValueError):
+        test_size = 0.2
+    return min(max(test_size, 0.1), 0.5)
+
+
 def encode_target(target_values):
     encoded_target = pd.Categorical(target_values)
     return encoded_target.codes, encoded_target.categories
+
+
+def split_classification_data(target_values, x_encoded, test_size):
+    y_codes, class_names = encode_target(target_values)
+    indices = np.arange(len(y_codes))
+    class_counts = pd.Series(y_codes).value_counts()
+    stratify = y_codes if class_counts.min() >= 2 else None
+
+    try:
+        train_idx, test_idx = train_test_split(
+            indices,
+            test_size=test_size,
+            random_state=42,
+            stratify=stratify,
+        )
+    except ValueError:
+        train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=42)
+
+    if len(np.unique(y_codes[train_idx])) < 2:
+        raise ValueError("The training split must contain at least two target classes.")
+
+    return {
+        "x_train": x_encoded.iloc[train_idx],
+        "x_test": x_encoded.iloc[test_idx],
+        "target_train": target_values.iloc[train_idx],
+        "target_test": target_values.iloc[test_idx],
+        "y_train": y_codes[train_idx],
+        "y_test": y_codes[test_idx],
+        "class_names": class_names,
+    }
 
 
 def confusion_table(actual, predicted):
@@ -579,10 +636,11 @@ def tree_plot_image(tree, feature_names, class_names):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def fit_logistic_regression(data, target, predictors):
+def fit_logistic_regression(data, target, predictors, test_size):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True)
-    y = (target_values == classes[1]).astype(float).to_numpy()
-    x_matrix = np.column_stack([np.ones(len(x_encoded)), x_encoded.to_numpy(dtype=float)])
+    split = split_classification_data(target_values, x_encoded, test_size)
+    y = (split["target_train"] == classes[1]).astype(float).to_numpy()
+    x_matrix = np.column_stack([np.ones(len(split["x_train"])), split["x_train"].to_numpy(dtype=float)])
     feature_names = ["Intercept"] + list(x_encoded.columns)
     beta = np.zeros(x_matrix.shape[1])
     ridge = 1e-8
@@ -627,63 +685,66 @@ def fit_logistic_regression(data, target, predictors):
         }
     )
 
-    predicted = np.where(probabilities >= 0.5, classes[1], classes[0])
-    confusion = pd.crosstab(
-        pd.Series(target_values.to_numpy(), name="Actual"),
-        pd.Series(predicted, name="Predicted"),
-        dropna=False,
-    )
-    accuracy = float(np.mean(predicted == target_values.to_numpy()))
+    test_matrix = np.column_stack([np.ones(len(split["x_test"])), split["x_test"].to_numpy(dtype=float)])
+    test_probabilities = np.clip(sigmoid(test_matrix @ beta), 1e-8, 1 - 1e-8)
+    predicted = np.where(test_probabilities >= 0.5, classes[1], classes[0])
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted)
+    accuracy = float(np.mean(predicted == split["target_test"].to_numpy()))
 
     return {
         "title": "Logistic regression results",
-        "description": f"Target: {target}. Positive class: {classes[1]}.",
+        "description": f"Target: {target}. Positive class: {classes[1]}. Metrics are computed on the held-out test set.",
         "target": target,
         "positive_class": str(classes[1]),
-        "nobs": len(y),
         "metrics": [
-            {"label": "Observations", "value": len(y)},
-            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
-            {"label": "AIC", "value": f"{aic:.3f}"},
-            {"label": "McFadden R2", "value": f"{pseudo_r2:.3f}"},
-            {"label": "Log likelihood", "value": f"{log_likelihood:.3f}"},
-            {"label": "BIC", "value": f"{bic:.3f}"},
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Train AIC", "value": f"{aic:.3f}"},
+            {"label": "Train McFadden R2", "value": f"{pseudo_r2:.3f}"},
+            {"label": "Train log likelihood", "value": f"{log_likelihood:.3f}"},
         ],
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
-        "details_html": details_table({"Model": "Logistic regression", "Decision threshold": "0.5"}),
+        "details_html": details_table({
+            "Model": "Logistic regression",
+            "Decision threshold": "0.5",
+            "Test set size": f"{test_size:.0%}",
+            "Random seed": 42,
+        }),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
     }
 
 
-def fit_tree_model(data, target, predictors):
+def fit_tree_model(data, target, predictors, test_size):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    y, class_names = encode_target(target_values)
-    min_samples_leaf = max(1, int(len(y) * 0.02))
+    split = split_classification_data(target_values, x_encoded, test_size)
+    class_names = split["class_names"]
+    min_samples_leaf = max(1, int(len(split["y_train"]) * 0.02))
 
     tree = DecisionTreeClassifier(
         max_depth=4,
         min_samples_leaf=min_samples_leaf,
         random_state=42,
     )
-    tree.fit(x_encoded, y)
-    predicted_codes = tree.predict(x_encoded)
+    tree.fit(split["x_train"], split["y_train"])
+    predicted_codes = tree.predict(split["x_test"])
     predicted_labels = class_names[predicted_codes]
-    accuracy = accuracy_score(target_values, predicted_labels)
+    accuracy = accuracy_score(split["target_test"], predicted_labels)
 
-    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
     tree_plot = tree_plot_image(tree, x_encoded.columns, class_names)
 
     return {
         "title": "Tree model results",
-        "description": f"Target: {target}. Classes: {', '.join(str(value) for value in classes)}.",
+        "description": f"Target: {target}. Test-set metrics are shown. Classes: {', '.join(str(value) for value in classes)}.",
         "target": target,
         "positive_class": None,
-        "nobs": len(y),
         "metrics": [
-            {"label": "Observations", "value": len(y)},
-            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
             {"label": "Tree depth", "value": tree.get_depth()},
             {"label": "Terminal nodes", "value": tree.get_n_leaves()},
         ],
@@ -693,36 +754,39 @@ def fit_tree_model(data, target, predictors):
             "Model": "Decision tree classifier",
             "Max depth": tree.max_depth,
             "Minimum samples per leaf": min_samples_leaf,
+            "Test set size": f"{test_size:.0%}",
+            "Random seed": 42,
         }),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": tree_plot,
     }
 
 
-def fit_random_forest_model(data, target, predictors):
+def fit_random_forest_model(data, target, predictors, test_size):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    y, class_names = encode_target(target_values)
-    min_samples_leaf = max(1, int(len(y) * 0.01))
+    split = split_classification_data(target_values, x_encoded, test_size)
+    class_names = split["class_names"]
+    min_samples_leaf = max(1, int(len(split["y_train"]) * 0.01))
     model = RandomForestClassifier(
         n_estimators=200,
         min_samples_leaf=min_samples_leaf,
         random_state=42,
         n_jobs=-1,
     )
-    model.fit(x_encoded, y)
-    predicted_labels = class_names[model.predict(x_encoded)]
-    accuracy = accuracy_score(target_values, predicted_labels)
-    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+    model.fit(split["x_train"], split["y_train"])
+    predicted_labels = class_names[model.predict(split["x_test"])]
+    accuracy = accuracy_score(split["target_test"], predicted_labels)
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
 
     return {
         "title": "Random Forest results",
-        "description": f"Target: {target}. Classes: {', '.join(str(value) for value in classes)}.",
+        "description": f"Target: {target}. Test-set metrics are shown. Classes: {', '.join(str(value) for value in classes)}.",
         "target": target,
         "positive_class": None,
-        "nobs": len(y),
         "metrics": [
-            {"label": "Observations", "value": len(y)},
-            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
             {"label": "Trees", "value": model.n_estimators},
             {"label": "Classes", "value": len(class_names)},
         ],
@@ -732,6 +796,7 @@ def fit_random_forest_model(data, target, predictors):
             "Model": "RandomForestClassifier",
             "Trees": model.n_estimators,
             "Minimum samples per leaf": min_samples_leaf,
+            "Test set size": f"{test_size:.0%}",
             "Random seed": 42,
         }),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
@@ -739,29 +804,30 @@ def fit_random_forest_model(data, target, predictors):
     }
 
 
-def fit_gradient_boosting_model(data, target, predictors):
+def fit_gradient_boosting_model(data, target, predictors, test_size):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    y, class_names = encode_target(target_values)
+    split = split_classification_data(target_values, x_encoded, test_size)
+    class_names = split["class_names"]
     model = GradientBoostingClassifier(
         n_estimators=100,
         learning_rate=0.1,
         max_depth=3,
         random_state=42,
     )
-    model.fit(x_encoded, y)
-    predicted_labels = class_names[model.predict(x_encoded)]
-    accuracy = accuracy_score(target_values, predicted_labels)
-    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+    model.fit(split["x_train"], split["y_train"])
+    predicted_labels = class_names[model.predict(split["x_test"])]
+    accuracy = accuracy_score(split["target_test"], predicted_labels)
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
 
     return {
         "title": "Gradient Boosting results",
-        "description": f"Target: {target}. Classes: {', '.join(str(value) for value in classes)}.",
+        "description": f"Target: {target}. Test-set metrics are shown. Classes: {', '.join(str(value) for value in classes)}.",
         "target": target,
         "positive_class": None,
-        "nobs": len(y),
         "metrics": [
-            {"label": "Observations", "value": len(y)},
-            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
             {"label": "Boosting stages", "value": model.n_estimators},
             {"label": "Learning rate", "value": model.learning_rate},
         ],
@@ -772,6 +838,7 @@ def fit_gradient_boosting_model(data, target, predictors):
             "Boosting stages": model.n_estimators,
             "Learning rate": model.learning_rate,
             "Maximum tree depth": model.max_depth,
+            "Test set size": f"{test_size:.0%}",
             "Random seed": 42,
         }),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
@@ -779,25 +846,28 @@ def fit_gradient_boosting_model(data, target, predictors):
     }
 
 
-def fit_svm_model(data, target, predictors):
+def fit_svm_model(data, target, predictors, test_size):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    y, class_names = encode_target(target_values)
-    scaled_x = StandardScaler().fit_transform(x_encoded)
+    split = split_classification_data(target_values, x_encoded, test_size)
+    class_names = split["class_names"]
+    scaler = StandardScaler()
+    scaled_train = scaler.fit_transform(split["x_train"])
+    scaled_test = scaler.transform(split["x_test"])
     model = SVC(kernel="rbf", C=1.0, gamma="scale", random_state=42)
-    model.fit(scaled_x, y)
-    predicted_labels = class_names[model.predict(scaled_x)]
-    accuracy = accuracy_score(target_values, predicted_labels)
-    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+    model.fit(scaled_train, split["y_train"])
+    predicted_labels = class_names[model.predict(scaled_test)]
+    accuracy = accuracy_score(split["target_test"], predicted_labels)
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
 
     return {
         "title": "Support Vector Machine results",
-        "description": f"Target: {target}. Features were standardized before fitting.",
+        "description": f"Target: {target}. Features were standardized using the training split; test-set metrics are shown.",
         "target": target,
         "positive_class": None,
-        "nobs": len(y),
         "metrics": [
-            {"label": "Observations", "value": len(y)},
-            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
             {"label": "Kernel", "value": model.kernel},
             {"label": "Support vectors", "value": int(np.sum(model.n_support_))},
         ],
@@ -809,32 +879,36 @@ def fit_svm_model(data, target, predictors):
             "C": model.C,
             "Gamma": model.gamma,
             "Support vectors by class": ", ".join(str(value) for value in model.n_support_),
+            "Test set size": f"{test_size:.0%}",
         }),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
     }
 
 
-def fit_knn_model(data, target, predictors):
+def fit_knn_model(data, target, predictors, test_size):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    y, class_names = encode_target(target_values)
-    scaled_x = StandardScaler().fit_transform(x_encoded)
-    neighbors = min(5, len(y))
+    split = split_classification_data(target_values, x_encoded, test_size)
+    class_names = split["class_names"]
+    scaler = StandardScaler()
+    scaled_train = scaler.fit_transform(split["x_train"])
+    scaled_test = scaler.transform(split["x_test"])
+    neighbors = min(5, len(split["y_train"]))
     model = KNeighborsClassifier(n_neighbors=neighbors, weights="distance")
-    model.fit(scaled_x, y)
-    predicted_labels = class_names[model.predict(scaled_x)]
-    accuracy = accuracy_score(target_values, predicted_labels)
-    confusion = confusion_table(target_values.to_numpy(), predicted_labels)
+    model.fit(scaled_train, split["y_train"])
+    predicted_labels = class_names[model.predict(scaled_test)]
+    accuracy = accuracy_score(split["target_test"], predicted_labels)
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
 
     return {
         "title": "kNN results",
-        "description": f"Target: {target}. Features were standardized before fitting.",
+        "description": f"Target: {target}. Features were standardized using the training split; test-set metrics are shown.",
         "target": target,
         "positive_class": None,
-        "nobs": len(y),
         "metrics": [
-            {"label": "Observations", "value": len(y)},
-            {"label": "Accuracy", "value": f"{accuracy:.3f}"},
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
             {"label": "Neighbors", "value": neighbors},
             {"label": "Weights", "value": model.weights},
         ],
@@ -845,6 +919,7 @@ def fit_knn_model(data, target, predictors):
             "Neighbors": neighbors,
             "Weights": model.weights,
             "Distance metric": model.metric,
+            "Test set size": f"{test_size:.0%}",
         }),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
@@ -873,6 +948,20 @@ def prepare_regression_data(data, target, predictors):
     return y, x_encoded
 
 
+def split_regression_data(y, x_encoded, test_size):
+    indices = np.arange(len(y))
+    train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=42)
+    if len(train_idx) < 2 or len(test_idx) < 1:
+        raise ValueError("The train/test split leaves too few rows for regression.")
+
+    return {
+        "x_train": x_encoded.iloc[train_idx],
+        "x_test": x_encoded.iloc[test_idx],
+        "y_train": y[train_idx],
+        "y_test": y[test_idx],
+    }
+
+
 def regression_metric_list(y, predictions, parameter_count=None):
     residuals = y - predictions
     sse = float(np.sum(residuals**2))
@@ -882,15 +971,15 @@ def regression_metric_list(y, predictions, parameter_count=None):
     mae = float(np.mean(np.abs(residuals)))
     metrics = [
         {"label": "Observations", "value": len(y)},
-        {"label": "R squared", "value": f"{r_squared:.3f}"},
-        {"label": "RMSE", "value": f"{rmse:.3f}"},
-        {"label": "MAE", "value": f"{mae:.3f}"},
+        {"label": "Test R squared", "value": f"{r_squared:.3f}"},
+        {"label": "Test RMSE", "value": f"{rmse:.3f}"},
+        {"label": "Test MAE", "value": f"{mae:.3f}"},
     ]
 
     if parameter_count is not None and len(y) > parameter_count:
         residual_df = len(y) - parameter_count
         adj_r_squared = 1 - ((1 - r_squared) * (len(y) - 1) / residual_df)
-        metrics.append({"label": "Adj. R squared", "value": f"{adj_r_squared:.3f}"})
+        metrics.append({"label": "Test adj. R squared", "value": f"{adj_r_squared:.3f}"})
 
     return metrics
 
@@ -905,52 +994,27 @@ def regression_coefficient_table(feature_names, coefficients):
     return coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format)
 
 
-def fit_linear_regression(data, target, predictors):
-    if target in predictors:
-        raise ValueError("The target column cannot also be used as a predictor.")
-
-    selected = [target] + predictors
-    model_data = data[selected].dropna()
-    if len(model_data) < 3:
-        raise ValueError("At least three complete rows are required.")
-
-    y_series = pd.to_numeric(model_data[target], errors="coerce")
-    model_data = model_data.loc[y_series.notna()].copy()
-    y = y_series.loc[y_series.notna()].to_numpy(dtype=float)
-    if len(y) < 3:
-        raise ValueError("The regression target must contain at least three numeric values.")
-
-    x_raw = model_data[predictors]
-    x_encoded = pd.get_dummies(x_raw, drop_first=True, dtype=float)
-    if x_encoded.empty:
-        raise ValueError("At least one usable predictor is required.")
-
-    x_matrix = np.column_stack([np.ones(len(x_encoded)), x_encoded.to_numpy(dtype=float)])
+def fit_linear_regression(data, target, predictors, test_size):
+    y, x_encoded = prepare_regression_data(data, target, predictors)
+    split = split_regression_data(y, x_encoded, test_size)
+    x_train = np.column_stack([np.ones(len(split["x_train"])), split["x_train"].to_numpy(dtype=float)])
+    x_test = np.column_stack([np.ones(len(split["x_test"])), split["x_test"].to_numpy(dtype=float)])
     feature_names = ["Intercept"] + list(x_encoded.columns)
-    rank = np.linalg.matrix_rank(x_matrix)
-    if len(y) <= rank:
-        raise ValueError("Not enough rows for the selected predictors.")
+    rank = np.linalg.matrix_rank(x_train)
+    if len(split["y_train"]) <= rank:
+        raise ValueError("Not enough training rows for the selected predictors.")
 
-    beta = np.linalg.pinv(x_matrix) @ y
-    fitted = x_matrix @ beta
-    residuals = y - fitted
-    sse = float(np.sum(residuals**2))
-    tss = float(np.sum((y - np.mean(y)) ** 2))
-    r_squared = 1 - (sse / tss) if tss > 0 else 0.0
-    nobs = len(y)
-    predictor_df = max(rank - 1, 1)
-    residual_df = nobs - rank
-    adj_r_squared = 1 - ((1 - r_squared) * (nobs - 1) / residual_df)
-    mse = sse / residual_df
-    rmse = math.sqrt(sse / nobs)
-    residual_se = math.sqrt(mse)
-    msr = (tss - sse) / predictor_df if predictor_df else float("nan")
-    f_statistic = msr / mse if mse > 0 else float("inf")
-
-    covariance = mse * np.linalg.pinv(x_matrix.T @ x_matrix)
+    beta = np.linalg.pinv(x_train) @ split["y_train"]
+    train_fitted = x_train @ beta
+    train_residuals = split["y_train"] - train_fitted
+    train_sse = float(np.sum(train_residuals**2))
+    train_residual_df = len(split["y_train"]) - rank
+    train_mse = train_sse / train_residual_df
+    covariance = train_mse * np.linalg.pinv(x_train.T @ x_train)
     standard_errors = np.sqrt(np.maximum(np.diag(covariance), 0))
     t_values = np.divide(beta, standard_errors, out=np.zeros_like(beta), where=standard_errors > 0)
     p_values = [normal_two_sided_pvalue(t_value) for t_value in t_values]
+    test_predictions = x_test @ beta
 
     coefficients = pd.DataFrame(
         {
@@ -962,65 +1026,76 @@ def fit_linear_regression(data, target, predictors):
         }
     )
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], test_predictions, parameter_count=rank)[1:]
+
     return {
         "title": "Linear Regression results",
-        "description": f"Target: {target}. Ordinary least squares fit.",
+        "description": f"Target: {target}. Ordinary least squares fit; metrics are computed on the held-out test set.",
         "target": target,
-        "metrics": [
-            {"label": "Observations", "value": nobs},
-            {"label": "R squared", "value": f"{r_squared:.3f}"},
-            {"label": "Adj. R squared", "value": f"{adj_r_squared:.3f}"},
-            {"label": "RMSE", "value": f"{rmse:.3f}"},
-            {"label": "Residual SE", "value": f"{residual_se:.3f}"},
-            {"label": "F statistic", "value": f"{f_statistic:.3f}"},
-        ],
+        "metrics": metrics,
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
         "details_html": details_table({
             "Model": "Ordinary least squares",
-            "Model df": predictor_df,
-            "Residual df": residual_df,
+            "Train residual df": train_residual_df,
+            "Test set size": f"{test_size:.0%}",
+            "Random seed": 42,
         }),
     }
 
 
-def fit_ridge_regression(data, target, predictors):
+def fit_ridge_regression(data, target, predictors, test_size):
     y, x_encoded = prepare_regression_data(data, target, predictors)
+    split = split_regression_data(y, x_encoded, test_size)
     scaler = StandardScaler()
-    scaled_x = scaler.fit_transform(x_encoded)
+    scaled_train = scaler.fit_transform(split["x_train"])
+    scaled_test = scaler.transform(split["x_test"])
     model = Ridge(alpha=1.0)
-    model.fit(scaled_x, y)
-    predictions = model.predict(scaled_x)
+    model.fit(scaled_train, split["y_train"])
+    predictions = model.predict(scaled_test)
 
     return {
         "title": "Ridge Regression results",
-        "description": f"Target: {target}. Predictors were standardized before fitting.",
+        "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
-        "metrics": regression_metric_list(y, predictions, parameter_count=scaled_x.shape[1] + 1),
+        "metrics": [
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+        ] + regression_metric_list(split["y_test"], predictions, parameter_count=scaled_train.shape[1] + 1)[1:],
         "coefficients_html": regression_coefficient_table(["Intercept"] + list(x_encoded.columns), [model.intercept_] + list(model.coef_)),
         "importances_html": None,
         "details_html": details_table({
             "Model": "Ridge",
             "Alpha": model.alpha,
             "Feature scaling": "StandardScaler",
+            "Test set size": f"{test_size:.0%}",
+            "Random seed": 42,
         }),
     }
 
 
-def fit_lasso_regression(data, target, predictors):
+def fit_lasso_regression(data, target, predictors, test_size):
     y, x_encoded = prepare_regression_data(data, target, predictors)
+    split = split_regression_data(y, x_encoded, test_size)
     scaler = StandardScaler()
-    scaled_x = scaler.fit_transform(x_encoded)
+    scaled_train = scaler.fit_transform(split["x_train"])
+    scaled_test = scaler.transform(split["x_test"])
     model = Lasso(alpha=0.1, max_iter=10000, random_state=42)
-    model.fit(scaled_x, y)
-    predictions = model.predict(scaled_x)
+    model.fit(scaled_train, split["y_train"])
+    predictions = model.predict(scaled_test)
     nonzero_count = int(np.sum(np.abs(model.coef_) > 1e-8))
 
     return {
         "title": "Lasso Regression results",
-        "description": f"Target: {target}. Predictors were standardized before fitting.",
+        "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
-        "metrics": regression_metric_list(y, predictions, parameter_count=nonzero_count + 1),
+        "metrics": [
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+        ] + regression_metric_list(split["y_test"], predictions, parameter_count=nonzero_count + 1)[1:],
         "coefficients_html": regression_coefficient_table(["Intercept"] + list(x_encoded.columns), [model.intercept_] + list(model.coef_)),
         "importances_html": None,
         "details_html": details_table({
@@ -1028,54 +1103,65 @@ def fit_lasso_regression(data, target, predictors):
             "Alpha": model.alpha,
             "Non-zero coefficients": nonzero_count,
             "Feature scaling": "StandardScaler",
+            "Test set size": f"{test_size:.0%}",
+            "Random seed": 42,
         }),
     }
 
 
-def fit_random_forest_regression(data, target, predictors):
+def fit_random_forest_regression(data, target, predictors, test_size):
     y, x_encoded = prepare_regression_data(data, target, predictors)
-    min_samples_leaf = max(1, int(len(y) * 0.01))
+    split = split_regression_data(y, x_encoded, test_size)
+    min_samples_leaf = max(1, int(len(split["y_train"]) * 0.01))
     model = RandomForestRegressor(
         n_estimators=200,
         min_samples_leaf=min_samples_leaf,
         random_state=42,
         n_jobs=-1,
     )
-    model.fit(x_encoded, y)
-    predictions = model.predict(x_encoded)
+    model.fit(split["x_train"], split["y_train"])
+    predictions = model.predict(split["x_test"])
 
     return {
         "title": "Random Forest Regression results",
-        "description": f"Target: {target}. Ensemble of regression trees.",
+        "description": f"Target: {target}. Ensemble of regression trees; test-set metrics are shown.",
         "target": target,
-        "metrics": regression_metric_list(y, predictions),
+        "metrics": [
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+        ] + regression_metric_list(split["y_test"], predictions)[1:],
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
         "details_html": details_table({
             "Model": "RandomForestRegressor",
             "Trees": model.n_estimators,
             "Minimum samples per leaf": min_samples_leaf,
+            "Test set size": f"{test_size:.0%}",
             "Random seed": 42,
         }),
     }
 
 
-def fit_gradient_boosting_regression(data, target, predictors):
+def fit_gradient_boosting_regression(data, target, predictors, test_size):
     y, x_encoded = prepare_regression_data(data, target, predictors)
+    split = split_regression_data(y, x_encoded, test_size)
     model = GradientBoostingRegressor(
         n_estimators=100,
         learning_rate=0.1,
         max_depth=3,
         random_state=42,
     )
-    model.fit(x_encoded, y)
-    predictions = model.predict(x_encoded)
+    model.fit(split["x_train"], split["y_train"])
+    predictions = model.predict(split["x_test"])
 
     return {
         "title": "Gradient Boosting Regression results",
-        "description": f"Target: {target}. Sequential boosted-tree regression model.",
+        "description": f"Target: {target}. Sequential boosted-tree regression model; test-set metrics are shown.",
         "target": target,
-        "metrics": regression_metric_list(y, predictions),
+        "metrics": [
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+        ] + regression_metric_list(split["y_test"], predictions)[1:],
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
         "details_html": details_table({
@@ -1083,24 +1169,30 @@ def fit_gradient_boosting_regression(data, target, predictors):
             "Boosting stages": model.n_estimators,
             "Learning rate": model.learning_rate,
             "Maximum tree depth": model.max_depth,
+            "Test set size": f"{test_size:.0%}",
             "Random seed": 42,
         }),
     }
 
 
-def fit_svr_regression(data, target, predictors):
+def fit_svr_regression(data, target, predictors, test_size):
     y, x_encoded = prepare_regression_data(data, target, predictors)
+    split = split_regression_data(y, x_encoded, test_size)
     scaler = StandardScaler()
-    scaled_x = scaler.fit_transform(x_encoded)
+    scaled_train = scaler.fit_transform(split["x_train"])
+    scaled_test = scaler.transform(split["x_test"])
     model = SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale")
-    model.fit(scaled_x, y)
-    predictions = model.predict(scaled_x)
+    model.fit(scaled_train, split["y_train"])
+    predictions = model.predict(scaled_test)
 
     return {
         "title": "Support Vector Regression results",
-        "description": f"Target: {target}. Predictors were standardized before fitting.",
+        "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
-        "metrics": regression_metric_list(y, predictions),
+        "metrics": [
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+        ] + regression_metric_list(split["y_test"], predictions)[1:],
         "coefficients_html": None,
         "importances_html": None,
         "details_html": details_table({
@@ -1111,24 +1203,31 @@ def fit_svr_regression(data, target, predictors):
             "Gamma": model.gamma,
             "Support vectors": len(model.support_),
             "Feature scaling": "StandardScaler",
+            "Test set size": f"{test_size:.0%}",
+            "Random seed": 42,
         }),
     }
 
 
-def fit_knn_regression(data, target, predictors):
+def fit_knn_regression(data, target, predictors, test_size):
     y, x_encoded = prepare_regression_data(data, target, predictors)
+    split = split_regression_data(y, x_encoded, test_size)
     scaler = StandardScaler()
-    scaled_x = scaler.fit_transform(x_encoded)
-    neighbors = min(5, len(y))
+    scaled_train = scaler.fit_transform(split["x_train"])
+    scaled_test = scaler.transform(split["x_test"])
+    neighbors = min(5, len(split["y_train"]))
     model = KNeighborsRegressor(n_neighbors=neighbors, weights="distance")
-    model.fit(scaled_x, y)
-    predictions = model.predict(scaled_x)
+    model.fit(scaled_train, split["y_train"])
+    predictions = model.predict(scaled_test)
 
     return {
         "title": "kNN Regression results",
-        "description": f"Target: {target}. Predictors were standardized before fitting.",
+        "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
-        "metrics": regression_metric_list(y, predictions),
+        "metrics": [
+            {"label": "Train rows", "value": len(split["x_train"])},
+            {"label": "Test rows", "value": len(split["x_test"])},
+        ] + regression_metric_list(split["y_test"], predictions)[1:],
         "coefficients_html": None,
         "importances_html": None,
         "details_html": details_table({
@@ -1137,6 +1236,8 @@ def fit_knn_regression(data, target, predictors):
             "Weights": model.weights,
             "Distance metric": model.metric,
             "Feature scaling": "StandardScaler",
+            "Test set size": f"{test_size:.0%}",
+            "Random seed": 42,
         }),
     }
 
@@ -1151,6 +1252,8 @@ def index():
     regression_output = None
     selected_classification_model = "logistic"
     selected_regression_model = "linear"
+    selected_classification_test_size = 0.2
+    selected_regression_test_size = 0.2
     selected_target = None
     selected_predictors = []
     selected_regression_target = None
@@ -1177,6 +1280,7 @@ def index():
     if request.method == "POST" and request.form.get("form_name") == "classification":
         active_tab = "classification"
         selected_classification_model = request.form.get("classification_model", "logistic")
+        selected_classification_test_size = parse_test_size(request.form.get("classification_test_size"))
         selected_target = request.form.get("target")
         selected_predictors = request.form.getlist("predictors")
 
@@ -1195,13 +1299,19 @@ def index():
                     "knn": fit_knn_model,
                 }
                 fit_model = classification_models.get(selected_classification_model, fit_logistic_regression)
-                model_output = fit_model(dataset["data"], selected_target, selected_predictors)
+                model_output = fit_model(
+                    dataset["data"],
+                    selected_target,
+                    selected_predictors,
+                    selected_classification_test_size,
+                )
             except Exception as exc:
                 classification_error = str(exc)
 
     if request.method == "POST" and request.form.get("form_name") == "regression":
         active_tab = "regression"
         selected_regression_model = request.form.get("regression_model", "linear")
+        selected_regression_test_size = parse_test_size(request.form.get("regression_test_size"))
         selected_regression_target = request.form.get("regression_target")
         selected_regression_predictors = request.form.getlist("regression_predictors")
 
@@ -1221,7 +1331,12 @@ def index():
                     "knn": fit_knn_regression,
                 }
                 fit_model = regression_models.get(selected_regression_model, fit_linear_regression)
-                regression_output = fit_model(dataset["data"], selected_regression_target, selected_regression_predictors)
+                regression_output = fit_model(
+                    dataset["data"],
+                    selected_regression_target,
+                    selected_regression_predictors,
+                    selected_regression_test_size,
+                )
             except Exception as exc:
                 regression_error = str(exc)
 
@@ -1260,9 +1375,11 @@ def index():
         has_data=has_data,
         columns=columns,
         selected_classification_model=selected_classification_model,
+        selected_classification_test_size=selected_classification_test_size,
         selected_target=selected_target,
         selected_predictors=selected_predictors,
         selected_regression_model=selected_regression_model,
+        selected_regression_test_size=selected_regression_test_size,
         selected_regression_target=selected_regression_target,
         selected_regression_predictors=selected_regression_predictors,
         model_output=model_output,
