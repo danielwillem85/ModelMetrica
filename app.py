@@ -334,6 +334,17 @@ PAGE_TEMPLATE = """
               </div>
             </div>
           </form>
+          <form method="post">
+            <input type="hidden" name="form_name" value="test_data">
+            <input type="hidden" name="active_tab" value="data">
+            <div>
+              <label>Test data</label>
+              <div class="form-row">
+                <button type="submit">Load test data</button>
+                <p>Simulates 1,000 rows with targets for classification and regression.</p>
+              </div>
+            </div>
+          </form>
           {% if data_error %}
             <p class="error">{{ data_error }}</p>
           {% endif %}
@@ -709,6 +720,29 @@ def read_uploaded_file(uploaded_file):
         return pd.read_csv(StringIO(file_bytes.decode("utf-8-sig")))
 
     return pd.read_excel(BytesIO(file_bytes))
+
+
+def simulate_test_data(row_count=1000):
+    rng = np.random.default_rng(42)
+    features = rng.normal(size=(row_count, 4))
+    x1, x2, x3, x4 = features.T
+
+    class_score = 0.9 * x1 - 0.7 * x2 + 0.35 * x3 + rng.normal(scale=0.8, size=row_count)
+    class_probability = sigmoid(class_score)
+    classification_target = rng.binomial(1, class_probability)
+
+    regression_target = 12 + 2.4 * x1 - 1.6 * x2 + 0.8 * x3 + 0.25 * x4 + rng.normal(scale=1.5, size=row_count)
+
+    return pd.DataFrame(
+        {
+            "classification_target": classification_target,
+            "regression_target": regression_target,
+            "feature_1": x1,
+            "feature_2": x2,
+            "feature_3": x3,
+            "feature_4": x4,
+        }
+    )
 
 
 def current_dataset():
@@ -1769,6 +1803,10 @@ def index():
             except Exception as exc:
                 data_error = f"Could not read the uploaded file: {exc}"
 
+    if authenticated and request.method == "POST" and form_name == "test_data":
+        active_tab = "data"
+        save_dataset(simulate_test_data(), "simulated_test_data.csv")
+
     dataset = current_dataset() if authenticated else None
 
     if authenticated and request.method == "POST" and form_name == "classification":
@@ -1852,8 +1890,8 @@ def index():
     if has_data and selected_regression_target is None:
         numeric_columns = list(data.select_dtypes(include="number").columns)
         if numeric_columns:
-            selected_regression_target = numeric_columns[0]
-            selected_regression_predictors = [column for column in numeric_columns[1:] if column in columns]
+            selected_regression_target = "regression_target" if "regression_target" in numeric_columns else numeric_columns[0]
+            selected_regression_predictors = [column for column in numeric_columns if column != selected_regression_target]
         else:
             selected_regression_target = columns[0]
             selected_regression_predictors = columns[1:]
