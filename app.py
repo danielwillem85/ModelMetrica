@@ -10,17 +10,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from flask import Flask, render_template_string, request, session
+from flask import Flask, Response, render_template_string, request, session
 from sklearn.ensemble import (
     GradientBoostingClassifier,
     GradientBoostingRegressor,
     RandomForestClassifier,
     RandomForestRegressor,
 )
-from sklearn.linear_model import Lasso, Ridge
+from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
+from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier, plot_tree
@@ -32,6 +33,7 @@ app.secret_key = "dev-secret-change-me"
 
 ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx"}
 DATASETS = {}
+DOWNLOADS = {}
 
 PAGE_TEMPLATE = """
 <!doctype html>
@@ -152,6 +154,23 @@ PAGE_TEMPLATE = """
       button:hover {
         background: var(--accent-dark);
         border-color: var(--accent-dark);
+      }
+      .download-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 16px 0;
+      }
+      .download-links a {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--accent-dark);
+        font-weight: 650;
+        padding: 9px 12px;
+        text-decoration: none;
+      }
+      .download-links a:hover {
+        border-color: var(--accent);
       }
       .error {
         color: var(--danger);
@@ -307,6 +326,15 @@ PAGE_TEMPLATE = """
                 </select>
               </div>
               <div>
+                <label for="classification_cv_folds">Cross-validation</label>
+                <select id="classification_cv_folds" name="classification_cv_folds" required>
+                  <option value="0" {{ 'selected' if selected_classification_cv_folds == 0 else '' }}>Off</option>
+                  <option value="3" {{ 'selected' if selected_classification_cv_folds == 3 else '' }}>3 folds</option>
+                  <option value="5" {{ 'selected' if selected_classification_cv_folds == 5 else '' }}>5 folds</option>
+                  <option value="10" {{ 'selected' if selected_classification_cv_folds == 10 else '' }}>10 folds</option>
+                </select>
+              </div>
+              <div>
                 <button type="submit">Run</button>
               </div>
             </form>
@@ -320,6 +348,13 @@ PAGE_TEMPLATE = """
           <div class="panel">
             <h2>{{ model_output.title }}</h2>
             <p>{{ model_output.description }}</p>
+            {% if model_output.downloads %}
+              <div class="download-links">
+                {% for download in model_output.downloads %}
+                  <a href="{{ download.href }}">{{ download.label }}</a>
+                {% endfor %}
+              </div>
+            {% endif %}
             <div class="metric-row">
               {% for metric in model_output.metrics %}
                 <div class="metric"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
@@ -404,6 +439,15 @@ PAGE_TEMPLATE = """
                 </select>
               </div>
               <div>
+                <label for="regression_cv_folds">Cross-validation</label>
+                <select id="regression_cv_folds" name="regression_cv_folds" required>
+                  <option value="0" {{ 'selected' if selected_regression_cv_folds == 0 else '' }}>Off</option>
+                  <option value="3" {{ 'selected' if selected_regression_cv_folds == 3 else '' }}>3 folds</option>
+                  <option value="5" {{ 'selected' if selected_regression_cv_folds == 5 else '' }}>5 folds</option>
+                  <option value="10" {{ 'selected' if selected_regression_cv_folds == 10 else '' }}>10 folds</option>
+                </select>
+              </div>
+              <div>
                 <button type="submit">Run</button>
               </div>
             </form>
@@ -417,6 +461,13 @@ PAGE_TEMPLATE = """
           <div class="panel">
             <h2>{{ regression_output.title }}</h2>
             <p>{{ regression_output.description }}</p>
+            {% if regression_output.downloads %}
+              <div class="download-links">
+                {% for download in regression_output.downloads %}
+                  <a href="{{ download.href }}">{{ download.label }}</a>
+                {% endfor %}
+              </div>
+            {% endif %}
             <div class="metric-row">
               {% for metric in regression_output.metrics %}
                 <div class="metric"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
@@ -550,6 +601,125 @@ def parse_test_size(value):
     return min(max(test_size, 0.1), 0.5)
 
 
+def parse_cv_folds(value):
+    try:
+        folds = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return folds if folds in {3, 5, 10} else 0
+
+
+def dataset_id():
+    return session.get("dataset_id")
+
+
+def metric_rows(metrics):
+    return pd.DataFrame([{"Metric": metric["label"], "Value": metric["value"]} for metric in metrics])
+
+
+def details_frame(details):
+    return pd.DataFrame([{"Setting": key, "Value": value} for key, value in details.items()])
+
+
+def register_downloads(result_type, result):
+    current_id = dataset_id()
+    if not current_id:
+        result["downloads"] = []
+        return result
+
+    downloads = {
+        "metrics": metric_rows(result.get("metrics", [])).to_csv(index=False),
+    }
+    for key, value in result.pop("download_data", {}).items():
+        downloads[key] = value
+
+    DOWNLOADS.setdefault(current_id, {})[result_type] = downloads
+    result["downloads"] = [
+        {
+            "label": f"Download {key.replace('_', ' ')}",
+            "href": f"/download/{result_type}/{key}",
+        }
+        for key in downloads
+    ]
+    return result
+
+
+def classification_estimator(model_name):
+    if model_name == "logistic":
+        return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=42))
+    if model_name == "tree":
+        return DecisionTreeClassifier(max_depth=4, random_state=42)
+    if model_name == "random_forest":
+        return RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+    if model_name == "gradient_boosting":
+        return GradientBoostingClassifier(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
+    if model_name == "svm":
+        return make_pipeline(StandardScaler(), SVC(kernel="rbf", C=1.0, gamma="scale", random_state=42))
+    if model_name == "knn":
+        return make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=5, weights="distance"))
+    raise ValueError("Unknown classification model.")
+
+
+def regression_estimator(model_name):
+    if model_name == "linear":
+        return LinearRegression()
+    if model_name == "ridge":
+        return make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+    if model_name == "lasso":
+        return make_pipeline(StandardScaler(), Lasso(alpha=0.1, max_iter=10000, random_state=42))
+    if model_name == "random_forest":
+        return RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
+    if model_name == "gradient_boosting":
+        return GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
+    if model_name == "svr":
+        return make_pipeline(StandardScaler(), SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale"))
+    if model_name == "knn":
+        return make_pipeline(StandardScaler(), KNeighborsRegressor(n_neighbors=5, weights="distance"))
+    raise ValueError("Unknown regression model.")
+
+
+def append_classification_cv(metrics, model_name, x_encoded, target_values, folds):
+    if folds <= 1:
+        return metrics
+
+    y_codes, _ = encode_target(target_values)
+    min_class_count = int(pd.Series(y_codes).value_counts().min())
+    actual_folds = min(folds, min_class_count)
+    if actual_folds < 2:
+        metrics.append({"label": "CV accuracy", "value": "Not enough class balance"})
+        return metrics
+
+    cv = StratifiedKFold(n_splits=actual_folds, shuffle=True, random_state=42)
+    scores = cross_val_score(classification_estimator(model_name), x_encoded, y_codes, cv=cv, scoring="accuracy")
+    metrics.extend([
+        {"label": "CV folds", "value": actual_folds},
+        {"label": "CV accuracy mean", "value": f"{scores.mean():.3f}"},
+        {"label": "CV accuracy SD", "value": f"{scores.std():.3f}"},
+    ])
+    return metrics
+
+
+def append_regression_cv(metrics, model_name, x_encoded, y, folds):
+    if folds <= 1:
+        return metrics
+
+    actual_folds = min(folds, len(y))
+    if actual_folds < 2:
+        metrics.append({"label": "CV R squared", "value": "Not enough rows"})
+        return metrics
+
+    cv = KFold(n_splits=actual_folds, shuffle=True, random_state=42)
+    estimator = regression_estimator(model_name)
+    r2_scores = cross_val_score(estimator, x_encoded, y, cv=cv, scoring="r2")
+    rmse_scores = -cross_val_score(estimator, x_encoded, y, cv=cv, scoring="neg_root_mean_squared_error")
+    metrics.extend([
+        {"label": "CV folds", "value": actual_folds},
+        {"label": "CV R squared mean", "value": f"{r2_scores.mean():.3f}"},
+        {"label": "CV RMSE mean", "value": f"{rmse_scores.mean():.3f}"},
+    ])
+    return metrics
+
+
 def encode_target(target_values):
     encoded_target = pd.Categorical(target_values)
     return encoded_target.codes, encoded_target.categories
@@ -594,9 +764,7 @@ def confusion_table(actual, predicted):
 
 
 def details_table(details):
-    return pd.DataFrame(
-        [{"Setting": key, "Value": value} for key, value in details.items()]
-    ).to_html(index=False, border=0, classes="model-details")
+    return details_frame(details).to_html(index=False, border=0, classes="model-details")
 
 
 def importance_table(feature_names, importances):
@@ -636,7 +804,7 @@ def tree_plot_image(tree, feature_names, class_names):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def fit_logistic_regression(data, target, predictors, test_size):
+def fit_logistic_regression(data, target, predictors, test_size, cv_folds):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True)
     split = split_classification_data(target_values, x_encoded, test_size)
     y = (split["target_train"] == classes[1]).astype(float).to_numpy()
@@ -691,33 +859,43 @@ def fit_logistic_regression(data, target, predictors, test_size):
     confusion = confusion_table(split["target_test"].to_numpy(), predicted)
     accuracy = float(np.mean(predicted == split["target_test"].to_numpy()))
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Train AIC", "value": f"{aic:.3f}"},
+        {"label": "Train McFadden R2", "value": f"{pseudo_r2:.3f}"},
+        {"label": "Train log likelihood", "value": f"{log_likelihood:.3f}"},
+    ]
+    metrics = append_classification_cv(metrics, "logistic", x_encoded, target_values, cv_folds)
+    details = {
+        "Model": "Logistic regression",
+        "Decision threshold": "0.5",
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+
     return {
         "title": "Logistic regression results",
         "description": f"Target: {target}. Positive class: {classes[1]}. Metrics are computed on the held-out test set.",
         "target": target,
         "positive_class": str(classes[1]),
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
-            {"label": "Train AIC", "value": f"{aic:.3f}"},
-            {"label": "Train McFadden R2", "value": f"{pseudo_r2:.3f}"},
-            {"label": "Train log likelihood", "value": f"{log_likelihood:.3f}"},
-        ],
+        "metrics": metrics,
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
-        "details_html": details_table({
-            "Model": "Logistic regression",
-            "Decision threshold": "0.5",
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
+        "download_data": {
+            "coefficients": coefficients.to_csv(index=False),
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_tree_model(data, target, predictors, test_size):
+def fit_tree_model(data, target, predictors, test_size, cv_folds):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
     split = split_classification_data(target_values, x_encoded, test_size)
     class_names = split["class_names"]
@@ -736,33 +914,45 @@ def fit_tree_model(data, target, predictors, test_size):
     confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
     tree_plot = tree_plot_image(tree, x_encoded.columns, class_names)
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Tree depth", "value": tree.get_depth()},
+        {"label": "Terminal nodes", "value": tree.get_n_leaves()},
+    ]
+    metrics = append_classification_cv(metrics, "tree", x_encoded, target_values, cv_folds)
+    details = {
+        "Model": "Decision tree classifier",
+        "Max depth": tree.max_depth,
+        "Minimum samples per leaf": min_samples_leaf,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+    importances_html = importance_table(x_encoded.columns, tree.feature_importances_)
+    importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": tree.feature_importances_})
+
     return {
         "title": "Tree model results",
         "description": f"Target: {target}. Test-set metrics are shown. Classes: {', '.join(str(value) for value in classes)}.",
         "target": target,
         "positive_class": None,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
-            {"label": "Tree depth", "value": tree.get_depth()},
-            {"label": "Terminal nodes", "value": tree.get_n_leaves()},
-        ],
+        "metrics": metrics,
         "coefficients_html": None,
-        "importances_html": importance_table(x_encoded.columns, tree.feature_importances_),
-        "details_html": details_table({
-            "Model": "Decision tree classifier",
-            "Max depth": tree.max_depth,
-            "Minimum samples per leaf": min_samples_leaf,
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "importances_html": importances_html,
+        "details_html": details_table(details),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": tree_plot,
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_random_forest_model(data, target, predictors, test_size):
+def fit_random_forest_model(data, target, predictors, test_size, cv_folds):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
     split = split_classification_data(target_values, x_encoded, test_size)
     class_names = split["class_names"]
@@ -778,33 +968,44 @@ def fit_random_forest_model(data, target, predictors, test_size):
     accuracy = accuracy_score(split["target_test"], predicted_labels)
     confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Trees", "value": model.n_estimators},
+        {"label": "Classes", "value": len(class_names)},
+    ]
+    metrics = append_classification_cv(metrics, "random_forest", x_encoded, target_values, cv_folds)
+    details = {
+        "Model": "RandomForestClassifier",
+        "Trees": model.n_estimators,
+        "Minimum samples per leaf": min_samples_leaf,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+    importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
+
     return {
         "title": "Random Forest results",
         "description": f"Target: {target}. Test-set metrics are shown. Classes: {', '.join(str(value) for value in classes)}.",
         "target": target,
         "positive_class": None,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
-            {"label": "Trees", "value": model.n_estimators},
-            {"label": "Classes", "value": len(class_names)},
-        ],
+        "metrics": metrics,
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
-        "details_html": details_table({
-            "Model": "RandomForestClassifier",
-            "Trees": model.n_estimators,
-            "Minimum samples per leaf": min_samples_leaf,
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_gradient_boosting_model(data, target, predictors, test_size):
+def fit_gradient_boosting_model(data, target, predictors, test_size, cv_folds):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
     split = split_classification_data(target_values, x_encoded, test_size)
     class_names = split["class_names"]
@@ -819,34 +1020,45 @@ def fit_gradient_boosting_model(data, target, predictors, test_size):
     accuracy = accuracy_score(split["target_test"], predicted_labels)
     confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Boosting stages", "value": model.n_estimators},
+        {"label": "Learning rate", "value": model.learning_rate},
+    ]
+    metrics = append_classification_cv(metrics, "gradient_boosting", x_encoded, target_values, cv_folds)
+    details = {
+        "Model": "GradientBoostingClassifier",
+        "Boosting stages": model.n_estimators,
+        "Learning rate": model.learning_rate,
+        "Maximum tree depth": model.max_depth,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+    importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
+
     return {
         "title": "Gradient Boosting results",
         "description": f"Target: {target}. Test-set metrics are shown. Classes: {', '.join(str(value) for value in classes)}.",
         "target": target,
         "positive_class": None,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
-            {"label": "Boosting stages", "value": model.n_estimators},
-            {"label": "Learning rate", "value": model.learning_rate},
-        ],
+        "metrics": metrics,
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
-        "details_html": details_table({
-            "Model": "GradientBoostingClassifier",
-            "Boosting stages": model.n_estimators,
-            "Learning rate": model.learning_rate,
-            "Maximum tree depth": model.max_depth,
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_svm_model(data, target, predictors, test_size):
+def fit_svm_model(data, target, predictors, test_size, cv_folds):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
     split = split_classification_data(target_values, x_encoded, test_size)
     class_names = split["class_names"]
@@ -859,34 +1071,43 @@ def fit_svm_model(data, target, predictors, test_size):
     accuracy = accuracy_score(split["target_test"], predicted_labels)
     confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Kernel", "value": model.kernel},
+        {"label": "Support vectors", "value": int(np.sum(model.n_support_))},
+    ]
+    metrics = append_classification_cv(metrics, "svm", x_encoded, target_values, cv_folds)
+    details = {
+        "Model": "SVC",
+        "Kernel": model.kernel,
+        "C": model.C,
+        "Gamma": model.gamma,
+        "Support vectors by class": ", ".join(str(value) for value in model.n_support_),
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+    }
+
     return {
         "title": "Support Vector Machine results",
         "description": f"Target: {target}. Features were standardized using the training split; test-set metrics are shown.",
         "target": target,
         "positive_class": None,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
-            {"label": "Kernel", "value": model.kernel},
-            {"label": "Support vectors", "value": int(np.sum(model.n_support_))},
-        ],
+        "metrics": metrics,
         "coefficients_html": None,
         "importances_html": None,
-        "details_html": details_table({
-            "Model": "SVC",
-            "Kernel": model.kernel,
-            "C": model.C,
-            "Gamma": model.gamma,
-            "Support vectors by class": ", ".join(str(value) for value in model.n_support_),
-            "Test set size": f"{test_size:.0%}",
-        }),
+        "details_html": details_table(details),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
+        "download_data": {
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_knn_model(data, target, predictors, test_size):
+def fit_knn_model(data, target, predictors, test_size, cv_folds):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
     split = split_classification_data(target_values, x_encoded, test_size)
     class_names = split["class_names"]
@@ -900,29 +1121,38 @@ def fit_knn_model(data, target, predictors, test_size):
     accuracy = accuracy_score(split["target_test"], predicted_labels)
     confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Neighbors", "value": neighbors},
+        {"label": "Weights", "value": model.weights},
+    ]
+    metrics = append_classification_cv(metrics, "knn", x_encoded, target_values, cv_folds)
+    details = {
+        "Model": "KNeighborsClassifier",
+        "Neighbors": neighbors,
+        "Weights": model.weights,
+        "Distance metric": model.metric,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+    }
+
     return {
         "title": "kNN results",
         "description": f"Target: {target}. Features were standardized using the training split; test-set metrics are shown.",
         "target": target,
         "positive_class": None,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-            {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
-            {"label": "Neighbors", "value": neighbors},
-            {"label": "Weights", "value": model.weights},
-        ],
+        "metrics": metrics,
         "coefficients_html": None,
         "importances_html": None,
-        "details_html": details_table({
-            "Model": "KNeighborsClassifier",
-            "Neighbors": neighbors,
-            "Weights": model.weights,
-            "Distance metric": model.metric,
-            "Test set size": f"{test_size:.0%}",
-        }),
+        "details_html": details_table(details),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
+        "download_data": {
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
@@ -994,7 +1224,7 @@ def regression_coefficient_table(feature_names, coefficients):
     return coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format)
 
 
-def fit_linear_regression(data, target, predictors, test_size):
+def fit_linear_regression(data, target, predictors, test_size, cv_folds):
     y, x_encoded = prepare_regression_data(data, target, predictors)
     split = split_regression_data(y, x_encoded, test_size)
     x_train = np.column_stack([np.ones(len(split["x_train"])), split["x_train"].to_numpy(dtype=float)])
@@ -1030,6 +1260,14 @@ def fit_linear_regression(data, target, predictors, test_size):
         {"label": "Train rows", "value": len(split["x_train"])},
         {"label": "Test rows", "value": len(split["x_test"])},
     ] + regression_metric_list(split["y_test"], test_predictions, parameter_count=rank)[1:]
+    metrics = append_regression_cv(metrics, "linear", x_encoded, y, cv_folds)
+    details = {
+        "Model": "Ordinary least squares",
+        "Train residual df": train_residual_df,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
 
     return {
         "title": "Linear Regression results",
@@ -1038,16 +1276,15 @@ def fit_linear_regression(data, target, predictors, test_size):
         "metrics": metrics,
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
-        "details_html": details_table({
-            "Model": "Ordinary least squares",
-            "Train residual df": train_residual_df,
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
+        "download_data": {
+            "coefficients": coefficients.to_csv(index=False),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_ridge_regression(data, target, predictors, test_size):
+def fit_ridge_regression(data, target, predictors, test_size, cv_folds):
     y, x_encoded = prepare_regression_data(data, target, predictors)
     split = split_regression_data(y, x_encoded, test_size)
     scaler = StandardScaler()
@@ -1057,27 +1294,37 @@ def fit_ridge_regression(data, target, predictors, test_size):
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions, parameter_count=scaled_train.shape[1] + 1)[1:]
+    metrics = append_regression_cv(metrics, "ridge", x_encoded, y, cv_folds)
+    details = {
+        "Model": "Ridge",
+        "Alpha": model.alpha,
+        "Feature scaling": "StandardScaler",
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+    coefficients = pd.DataFrame({"Term": ["Intercept"] + list(x_encoded.columns), "Coefficient": [model.intercept_] + list(model.coef_)})
+
     return {
         "title": "Ridge Regression results",
         "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-        ] + regression_metric_list(split["y_test"], predictions, parameter_count=scaled_train.shape[1] + 1)[1:],
-        "coefficients_html": regression_coefficient_table(["Intercept"] + list(x_encoded.columns), [model.intercept_] + list(model.coef_)),
+        "metrics": metrics,
+        "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
-        "details_html": details_table({
-            "Model": "Ridge",
-            "Alpha": model.alpha,
-            "Feature scaling": "StandardScaler",
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
+        "download_data": {
+            "coefficients": coefficients.to_csv(index=False),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_lasso_regression(data, target, predictors, test_size):
+def fit_lasso_regression(data, target, predictors, test_size, cv_folds):
     y, x_encoded = prepare_regression_data(data, target, predictors)
     split = split_regression_data(y, x_encoded, test_size)
     scaler = StandardScaler()
@@ -1088,28 +1335,38 @@ def fit_lasso_regression(data, target, predictors, test_size):
     predictions = model.predict(scaled_test)
     nonzero_count = int(np.sum(np.abs(model.coef_) > 1e-8))
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions, parameter_count=nonzero_count + 1)[1:]
+    metrics = append_regression_cv(metrics, "lasso", x_encoded, y, cv_folds)
+    details = {
+        "Model": "Lasso",
+        "Alpha": model.alpha,
+        "Non-zero coefficients": nonzero_count,
+        "Feature scaling": "StandardScaler",
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+    coefficients = pd.DataFrame({"Term": ["Intercept"] + list(x_encoded.columns), "Coefficient": [model.intercept_] + list(model.coef_)})
+
     return {
         "title": "Lasso Regression results",
         "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-        ] + regression_metric_list(split["y_test"], predictions, parameter_count=nonzero_count + 1)[1:],
-        "coefficients_html": regression_coefficient_table(["Intercept"] + list(x_encoded.columns), [model.intercept_] + list(model.coef_)),
+        "metrics": metrics,
+        "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
-        "details_html": details_table({
-            "Model": "Lasso",
-            "Alpha": model.alpha,
-            "Non-zero coefficients": nonzero_count,
-            "Feature scaling": "StandardScaler",
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
+        "download_data": {
+            "coefficients": coefficients.to_csv(index=False),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_random_forest_regression(data, target, predictors, test_size):
+def fit_random_forest_regression(data, target, predictors, test_size, cv_folds):
     y, x_encoded = prepare_regression_data(data, target, predictors)
     split = split_regression_data(y, x_encoded, test_size)
     min_samples_leaf = max(1, int(len(split["y_train"]) * 0.01))
@@ -1122,27 +1379,37 @@ def fit_random_forest_regression(data, target, predictors, test_size):
     model.fit(split["x_train"], split["y_train"])
     predictions = model.predict(split["x_test"])
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions)[1:]
+    metrics = append_regression_cv(metrics, "random_forest", x_encoded, y, cv_folds)
+    details = {
+        "Model": "RandomForestRegressor",
+        "Trees": model.n_estimators,
+        "Minimum samples per leaf": min_samples_leaf,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+    importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
+
     return {
         "title": "Random Forest Regression results",
         "description": f"Target: {target}. Ensemble of regression trees; test-set metrics are shown.",
         "target": target,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-        ] + regression_metric_list(split["y_test"], predictions)[1:],
+        "metrics": metrics,
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
-        "details_html": details_table({
-            "Model": "RandomForestRegressor",
-            "Trees": model.n_estimators,
-            "Minimum samples per leaf": min_samples_leaf,
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_gradient_boosting_regression(data, target, predictors, test_size):
+def fit_gradient_boosting_regression(data, target, predictors, test_size, cv_folds):
     y, x_encoded = prepare_regression_data(data, target, predictors)
     split = split_regression_data(y, x_encoded, test_size)
     model = GradientBoostingRegressor(
@@ -1154,28 +1421,38 @@ def fit_gradient_boosting_regression(data, target, predictors, test_size):
     model.fit(split["x_train"], split["y_train"])
     predictions = model.predict(split["x_test"])
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions)[1:]
+    metrics = append_regression_cv(metrics, "gradient_boosting", x_encoded, y, cv_folds)
+    details = {
+        "Model": "GradientBoostingRegressor",
+        "Boosting stages": model.n_estimators,
+        "Learning rate": model.learning_rate,
+        "Maximum tree depth": model.max_depth,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+    importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
+
     return {
         "title": "Gradient Boosting Regression results",
         "description": f"Target: {target}. Sequential boosted-tree regression model; test-set metrics are shown.",
         "target": target,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-        ] + regression_metric_list(split["y_test"], predictions)[1:],
+        "metrics": metrics,
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
-        "details_html": details_table({
-            "Model": "GradientBoostingRegressor",
-            "Boosting stages": model.n_estimators,
-            "Learning rate": model.learning_rate,
-            "Maximum tree depth": model.max_depth,
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_svr_regression(data, target, predictors, test_size):
+def fit_svr_regression(data, target, predictors, test_size, cv_folds):
     y, x_encoded = prepare_regression_data(data, target, predictors)
     split = split_regression_data(y, x_encoded, test_size)
     scaler = StandardScaler()
@@ -1185,31 +1462,39 @@ def fit_svr_regression(data, target, predictors, test_size):
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions)[1:]
+    metrics = append_regression_cv(metrics, "svr", x_encoded, y, cv_folds)
+    details = {
+        "Model": "SVR",
+        "Kernel": model.kernel,
+        "C": model.C,
+        "Epsilon": model.epsilon,
+        "Gamma": model.gamma,
+        "Support vectors": len(model.support_),
+        "Feature scaling": "StandardScaler",
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+
     return {
         "title": "Support Vector Regression results",
         "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-        ] + regression_metric_list(split["y_test"], predictions)[1:],
+        "metrics": metrics,
         "coefficients_html": None,
         "importances_html": None,
-        "details_html": details_table({
-            "Model": "SVR",
-            "Kernel": model.kernel,
-            "C": model.C,
-            "Epsilon": model.epsilon,
-            "Gamma": model.gamma,
-            "Support vectors": len(model.support_),
-            "Feature scaling": "StandardScaler",
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
+        "download_data": {
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
-def fit_knn_regression(data, target, predictors, test_size):
+def fit_knn_regression(data, target, predictors, test_size, cv_folds):
     y, x_encoded = prepare_regression_data(data, target, predictors)
     split = split_regression_data(y, x_encoded, test_size)
     scaler = StandardScaler()
@@ -1220,25 +1505,33 @@ def fit_knn_regression(data, target, predictors, test_size):
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
 
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions)[1:]
+    metrics = append_regression_cv(metrics, "knn", x_encoded, y, cv_folds)
+    details = {
+        "Model": "KNeighborsRegressor",
+        "Neighbors": neighbors,
+        "Weights": model.weights,
+        "Distance metric": model.metric,
+        "Feature scaling": "StandardScaler",
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": 42,
+    }
+
     return {
         "title": "kNN Regression results",
         "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
-        "metrics": [
-            {"label": "Train rows", "value": len(split["x_train"])},
-            {"label": "Test rows", "value": len(split["x_test"])},
-        ] + regression_metric_list(split["y_test"], predictions)[1:],
+        "metrics": metrics,
         "coefficients_html": None,
         "importances_html": None,
-        "details_html": details_table({
-            "Model": "KNeighborsRegressor",
-            "Neighbors": neighbors,
-            "Weights": model.weights,
-            "Distance metric": model.metric,
-            "Feature scaling": "StandardScaler",
-            "Test set size": f"{test_size:.0%}",
-            "Random seed": 42,
-        }),
+        "details_html": details_table(details),
+        "download_data": {
+            "details": details_frame(details).to_csv(index=False),
+        },
     }
 
 
@@ -1254,6 +1547,8 @@ def index():
     selected_regression_model = "linear"
     selected_classification_test_size = 0.2
     selected_regression_test_size = 0.2
+    selected_classification_cv_folds = 0
+    selected_regression_cv_folds = 0
     selected_target = None
     selected_predictors = []
     selected_regression_target = None
@@ -1281,6 +1576,7 @@ def index():
         active_tab = "classification"
         selected_classification_model = request.form.get("classification_model", "logistic")
         selected_classification_test_size = parse_test_size(request.form.get("classification_test_size"))
+        selected_classification_cv_folds = parse_cv_folds(request.form.get("classification_cv_folds"))
         selected_target = request.form.get("target")
         selected_predictors = request.form.getlist("predictors")
 
@@ -1304,7 +1600,9 @@ def index():
                     selected_target,
                     selected_predictors,
                     selected_classification_test_size,
+                    selected_classification_cv_folds,
                 )
+                model_output = register_downloads("classification", model_output)
             except Exception as exc:
                 classification_error = str(exc)
 
@@ -1312,6 +1610,7 @@ def index():
         active_tab = "regression"
         selected_regression_model = request.form.get("regression_model", "linear")
         selected_regression_test_size = parse_test_size(request.form.get("regression_test_size"))
+        selected_regression_cv_folds = parse_cv_folds(request.form.get("regression_cv_folds"))
         selected_regression_target = request.form.get("regression_target")
         selected_regression_predictors = request.form.getlist("regression_predictors")
 
@@ -1336,7 +1635,9 @@ def index():
                     selected_regression_target,
                     selected_regression_predictors,
                     selected_regression_test_size,
+                    selected_regression_cv_folds,
                 )
+                regression_output = register_downloads("regression", regression_output)
             except Exception as exc:
                 regression_error = str(exc)
 
@@ -1376,14 +1677,31 @@ def index():
         columns=columns,
         selected_classification_model=selected_classification_model,
         selected_classification_test_size=selected_classification_test_size,
+        selected_classification_cv_folds=selected_classification_cv_folds,
         selected_target=selected_target,
         selected_predictors=selected_predictors,
         selected_regression_model=selected_regression_model,
         selected_regression_test_size=selected_regression_test_size,
+        selected_regression_cv_folds=selected_regression_cv_folds,
         selected_regression_target=selected_regression_target,
         selected_regression_predictors=selected_regression_predictors,
         model_output=model_output,
         regression_output=regression_output,
+    )
+
+
+@app.route("/download/<result_type>/<artifact>")
+def download_result(result_type, artifact):
+    current_id = dataset_id()
+    csv_data = DOWNLOADS.get(current_id, {}).get(result_type, {}).get(artifact)
+    if csv_data is None:
+        return Response("No downloadable result is available for this selection.", status=404, mimetype="text/plain")
+
+    filename = f"{result_type}_{artifact}.csv"
+    return Response(
+        csv_data,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
