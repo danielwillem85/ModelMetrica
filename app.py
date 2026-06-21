@@ -1,6 +1,7 @@
 from io import BytesIO, StringIO
 import base64
 import math
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from flask import Flask, Response, render_template_string, request, session
+from flask import Flask, Response, redirect, render_template_string, request, session, url_for
 from sklearn.ensemble import (
     GradientBoostingClassifier,
     GradientBoostingRegressor,
@@ -25,6 +26,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier, plot_tree
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 app = Flask(__name__)
@@ -32,6 +34,7 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.secret_key = "dev-secret-change-me"
 
 ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx"}
+DB_PATH = Path(__file__).with_name("modelmetrica_users.sqlite3")
 DATASETS = {}
 DOWNLOADS = {}
 
@@ -65,9 +68,31 @@ PAGE_TEMPLATE = """
         border-bottom: 1px solid var(--line);
         padding: 20px 28px;
       }
+      .header-content {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+      }
       .brand {
         font-size: 22px;
         font-weight: 750;
+      }
+      .user-actions {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+      }
+      .logout-link {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--accent-dark);
+        font-weight: 650;
+        padding: 9px 12px;
+        text-decoration: none;
+      }
+      .logout-link:hover {
+        border-color: var(--accent);
       }
       main {
         width: min(1120px, calc(100% - 40px));
@@ -155,6 +180,39 @@ PAGE_TEMPLATE = """
         background: var(--accent-dark);
         border-color: var(--accent-dark);
       }
+      .auth-overlay {
+        align-items: center;
+        background: rgba(15, 23, 42, 0.62);
+        display: flex;
+        inset: 0;
+        justify-content: center;
+        padding: 24px;
+        position: fixed;
+        z-index: 1000;
+      }
+      .auth-card {
+        background: var(--surface);
+        border-radius: 8px;
+        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+        max-width: 760px;
+        padding: 26px;
+        width: min(100%, 760px);
+      }
+      .auth-grid {
+        display: grid;
+        gap: 22px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .auth-card input {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        width: 100%;
+      }
+      .auth-card h2,
+      .auth-card h3 {
+        margin-top: 0;
+      }
       .download-links {
         display: flex;
         flex-wrap: wrap;
@@ -234,13 +292,25 @@ PAGE_TEMPLATE = """
         .metric-row {
           grid-template-columns: 1fr;
         }
+        .auth-grid {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
   <body>
     <header>
-      <div class="brand">ModelMetrica</div>
+      <div class="header-content">
+        <div class="brand">ModelMetrica</div>
+        {% if is_authenticated %}
+          <div class="user-actions">
+            <span>{{ current_username }}</span>
+            <a class="logout-link" href="{{ url_for('logout') }}">Log out</a>
+          </div>
+        {% endif %}
+      </div>
     </header>
+    {% if is_authenticated %}
     <main>
       <h1>Modeling workspace</h1>
       <p>Upload a CSV or Excel file, inspect the first rows, then run classification or regression analysis.</p>
@@ -495,6 +565,46 @@ PAGE_TEMPLATE = """
         {% endif %}
       </section>
     </main>
+    {% endif %}
+    {% if not is_authenticated %}
+      <div class="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+        <div class="auth-card">
+          <h2 id="auth-title">Welcome to ModelMetrica</h2>
+          <p>Log in or create an account to access the modeling workspace.</p>
+          {% if auth_error %}
+            <p class="error">{{ auth_error }}</p>
+          {% endif %}
+          <div class="auth-grid">
+            <form method="post">
+              <input type="hidden" name="form_name" value="login">
+              <h3>Log in</h3>
+              <div>
+                <label for="login_username">Username</label>
+                <input id="login_username" name="username" autocomplete="username" required>
+              </div>
+              <div>
+                <label for="login_password">Password</label>
+                <input id="login_password" name="password" type="password" autocomplete="current-password" required>
+              </div>
+              <button type="submit">Log in</button>
+            </form>
+            <form method="post">
+              <input type="hidden" name="form_name" value="signup">
+              <h3>Sign up</h3>
+              <div>
+                <label for="signup_username">Username</label>
+                <input id="signup_username" name="username" autocomplete="username" required>
+              </div>
+              <div>
+                <label for="signup_password">Password</label>
+                <input id="signup_password" name="password" type="password" autocomplete="new-password" minlength="6" required>
+              </div>
+              <button type="submit">Create account</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    {% endif %}
     <script>
       const tabs = document.querySelectorAll(".tab");
       const panels = document.querySelectorAll(".tab-panel");
@@ -524,6 +634,71 @@ PAGE_TEMPLATE = """
 
 def allowed_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+
+def get_db_connection():
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def init_auth_db():
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+
+def find_user(username):
+    with get_db_connection() as connection:
+        return connection.execute(
+            "SELECT id, username, password_hash FROM users WHERE lower(username) = lower(?)",
+            (username,),
+        ).fetchone()
+
+
+def create_user(username, password):
+    username = username.strip()
+    if len(username) < 3:
+        raise ValueError("Username must be at least 3 characters.")
+    if len(password) < 6:
+        raise ValueError("Password must be at least 6 characters.")
+    if find_user(username):
+        raise ValueError("That username is already taken.")
+
+    password_hash = generate_password_hash(password)
+    with get_db_connection() as connection:
+        cursor = connection.execute(
+            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+            (username, password_hash),
+        )
+        return cursor.lastrowid
+
+
+def authenticate_user(username, password):
+    user = find_user(username.strip())
+    if user is None or not check_password_hash(user["password_hash"], password):
+        return None
+    return user
+
+
+def log_user_in(user_id, username):
+    session["user_id"] = user_id
+    session["username"] = username
+
+
+def is_user_authenticated():
+    return bool(session.get("user_id"))
+
+
+init_auth_db()
 
 
 def read_uploaded_file(uploaded_file):
@@ -1538,6 +1713,7 @@ def fit_knn_regression(data, target, predictors, test_size, cv_folds):
 @app.route("/", methods=["GET", "POST"])
 def index():
     active_tab = request.form.get("active_tab", "data")
+    auth_error = None
     data_error = None
     classification_error = None
     regression_error = None
@@ -1553,8 +1729,31 @@ def index():
     selected_predictors = []
     selected_regression_target = None
     selected_regression_predictors = []
+    form_name = request.form.get("form_name")
 
-    if request.method == "POST" and request.form.get("form_name") == "upload":
+    if request.method == "POST" and form_name == "signup":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        try:
+            user_id = create_user(username, password)
+            log_user_in(user_id, username.strip())
+            return redirect(url_for("index"))
+        except ValueError as exc:
+            auth_error = str(exc)
+
+    if request.method == "POST" and form_name == "login":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        user = authenticate_user(username, password)
+        if user is None:
+            auth_error = "Username or password is incorrect."
+        else:
+            log_user_in(user["id"], user["username"])
+            return redirect(url_for("index"))
+
+    authenticated = is_user_authenticated()
+
+    if authenticated and request.method == "POST" and form_name == "upload":
         uploaded_file = request.files.get("data_file")
 
         if uploaded_file is None or uploaded_file.filename == "":
@@ -1570,9 +1769,9 @@ def index():
             except Exception as exc:
                 data_error = f"Could not read the uploaded file: {exc}"
 
-    dataset = current_dataset()
+    dataset = current_dataset() if authenticated else None
 
-    if request.method == "POST" and request.form.get("form_name") == "classification":
+    if authenticated and request.method == "POST" and form_name == "classification":
         active_tab = "classification"
         selected_classification_model = request.form.get("classification_model", "logistic")
         selected_classification_test_size = parse_test_size(request.form.get("classification_test_size"))
@@ -1606,7 +1805,7 @@ def index():
             except Exception as exc:
                 classification_error = str(exc)
 
-    if request.method == "POST" and request.form.get("form_name") == "regression":
+    if authenticated and request.method == "POST" and form_name == "regression":
         active_tab = "regression"
         selected_regression_model = request.form.get("regression_model", "linear")
         selected_regression_test_size = parse_test_size(request.form.get("regression_test_size"))
@@ -1666,6 +1865,9 @@ def index():
     return render_template_string(
         PAGE_TEMPLATE,
         active_tab=active_tab,
+        auth_error=auth_error,
+        is_authenticated=authenticated,
+        current_username=session.get("username"),
         data_error=data_error,
         classification_error=classification_error,
         regression_error=regression_error,
@@ -1690,8 +1892,17 @@ def index():
     )
 
 
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("index"))
+
+
 @app.route("/download/<result_type>/<artifact>")
 def download_result(result_type, artifact):
+    if not is_user_authenticated():
+        return Response("Authentication required.", status=401, mimetype="text/plain")
+
     current_id = dataset_id()
     csv_data = DOWNLOADS.get(current_id, {}).get(result_type, {}).get(artifact)
     if csv_data is None:
