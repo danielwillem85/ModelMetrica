@@ -145,6 +145,9 @@ PAGE_TEMPLATE = """
         display: grid;
         gap: 14px;
       }
+      .data-actions form + form {
+        margin-top: 22px;
+      }
       .form-row {
         display: flex;
         gap: 12px;
@@ -322,7 +325,7 @@ PAGE_TEMPLATE = """
       </nav>
 
       <section id="data" class="tab-panel {{ 'active' if active_tab == 'data' else '' }}">
-        <div class="panel">
+        <div class="panel data-actions">
           <form method="post" enctype="multipart/form-data">
             <input type="hidden" name="form_name" value="upload">
             <input type="hidden" name="active_tab" value="data">
