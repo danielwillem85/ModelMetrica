@@ -50,13 +50,13 @@ PAGE_TEMPLATE = """
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div>
                 <label for="{{ tab.model_field }}">Model type</label>
-                <select id="{{ tab.model_field }}" name="{{ tab.model_field }}" required>
-                  <option value="logistic" {{ 'selected' if tab.selected_model == 'logistic' else '' }}>Logistic regression</option>
-                  <option value="tree" {{ 'selected' if tab.selected_model == 'tree' else '' }}>Tree model</option>
-                  <option value="random_forest" {{ 'selected' if tab.selected_model == 'random_forest' else '' }}>Random Forest</option>
-                  <option value="gradient_boosting" {{ 'selected' if tab.selected_model == 'gradient_boosting' else '' }}>Gradient Boosting</option>
-                  <option value="svm" {{ 'selected' if tab.selected_model == 'svm' else '' }}>Support Vector Machine</option>
-                  <option value="knn" {{ 'selected' if tab.selected_model == 'knn' else '' }}>kNN</option>
+                <select id="{{ tab.model_field }}" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple{% endif %} required>
+                  <option value="logistic" {{ 'selected' if 'logistic' in tab.selected_models else '' }}>Logistic regression</option>
+                  <option value="tree" {{ 'selected' if 'tree' in tab.selected_models else '' }}>Tree model</option>
+                  <option value="random_forest" {{ 'selected' if 'random_forest' in tab.selected_models else '' }}>Random Forest</option>
+                  <option value="gradient_boosting" {{ 'selected' if 'gradient_boosting' in tab.selected_models else '' }}>Gradient Boosting</option>
+                  <option value="svm" {{ 'selected' if 'svm' in tab.selected_models else '' }}>Support Vector Machine</option>
+                  <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN</option>
                 </select>
               </div>
               <div>
@@ -104,6 +104,20 @@ PAGE_TEMPLATE = """
           {% endif %}
         </div>
 
+        {% if tab.comparison_html %}
+          <div class="panel">
+            <h2>Model comparison</h2>
+            <p>Detailed results below show the best model by test accuracy.</p>
+            {% if tab.comparison_download %}
+              <div class="download-links">
+                <a href="{{ tab.comparison_download.href }}">{{ tab.comparison_download.label }}</a>
+              </div>
+            {% endif %}
+            <div class="table-wrap">
+              {{ tab.comparison_html|safe }}
+            </div>
+          </div>
+        {% endif %}
         {% if tab.output %}
           <div class="panel">
             <h2>{{ tab.output.title }}</h2>
@@ -164,14 +178,14 @@ PAGE_TEMPLATE = """
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div>
                 <label for="{{ tab.model_field }}">Model type</label>
-                <select id="{{ tab.model_field }}" name="{{ tab.model_field }}" required>
+                <select id="{{ tab.model_field }}" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple{% endif %} required>
                   <option value="linear" {{ 'selected' if tab.selected_model == 'linear' else '' }}>Linear Regression</option>
                   <option value="ridge" {{ 'selected' if tab.selected_model == 'ridge' else '' }}>Ridge Regression</option>
                   <option value="lasso" {{ 'selected' if tab.selected_model == 'lasso' else '' }}>Lasso Regression</option>
-                  <option value="random_forest" {{ 'selected' if tab.selected_model == 'random_forest' else '' }}>Random Forest Regression</option>
-                  <option value="gradient_boosting" {{ 'selected' if tab.selected_model == 'gradient_boosting' else '' }}>Gradient Boosting Regression</option>
+                  <option value="random_forest" {{ 'selected' if 'random_forest' in tab.selected_models else '' }}>Random Forest Regression</option>
+                  <option value="gradient_boosting" {{ 'selected' if 'gradient_boosting' in tab.selected_models else '' }}>Gradient Boosting Regression</option>
                   <option value="svr" {{ 'selected' if tab.selected_model == 'svr' else '' }}>Support Vector Regression</option>
-                  <option value="knn" {{ 'selected' if tab.selected_model == 'knn' else '' }}>kNN Regression</option>
+                  <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN Regression</option>
                 </select>
               </div>
               <div>
@@ -1797,6 +1811,7 @@ CLASSIFICATION_TAB_CONFIGS = {
         "test_size_field": "pro_classification_test_size",
         "cv_folds_field": "pro_classification_cv_folds",
         "default_model": "logistic",
+        "allow_model_comparison": True,
     },
 }
 
@@ -1829,16 +1844,19 @@ def make_model_tab(config):
     tab.update(
         {
             "selected_model": config["default_model"],
+            "selected_models": [config["default_model"]],
+            "allow_model_comparison": config.get("allow_model_comparison", False),
             "selected_test_size": 0.2,
             "selected_cv_folds": 0,
             "selected_target": None,
             "selected_predictors": [],
             "error": None,
             "output": None,
+            "comparison_html": None,
+            "comparison_download": None,
         }
     )
     return tab
-
 
 def make_model_tabs():
     return {
@@ -1869,13 +1887,182 @@ def apply_regression_defaults(tab, data, columns):
 
 
 def populate_tab_from_request(tab):
-    tab["selected_model"] = request.form.get(tab["model_field"], tab["default_model"])
+    if tab.get("allow_model_comparison"):
+        selected_models = request.form.getlist(tab["model_field"]) or [tab["default_model"]]
+        tab["selected_models"] = [model for model in selected_models if model in CLASSIFICATION_MODEL_FITTERS]
+        if not tab["selected_models"]:
+            tab["selected_models"] = [tab["default_model"]]
+        tab["selected_model"] = tab["selected_models"][0]
+    else:
+        tab["selected_model"] = request.form.get(tab["model_field"], tab["default_model"])
+        tab["selected_models"] = [tab["selected_model"]]
+
     tab["selected_test_size"] = parse_test_size(request.form.get(tab["test_size_field"]))
     tab["selected_cv_folds"] = parse_cv_folds(request.form.get(tab["cv_folds_field"]))
     tab["selected_target"] = request.form.get(tab["target_field"])
     tab["selected_predictors"] = request.form.getlist(tab["predictors_field"])
 
 
+CLASSIFICATION_MODEL_LABELS = {
+    "logistic": "Logistic regression",
+    "tree": "Tree model",
+    "random_forest": "Random Forest",
+    "gradient_boosting": "Gradient Boosting",
+    "svm": "Support Vector Machine",
+    "knn": "kNN",
+}
+
+
+def metric_value(output, label):
+    for metric in output.get("metrics", []):
+        if metric.get("label") == label:
+            return metric.get("value")
+    return None
+
+
+def metric_float(output, label):
+    value = metric_value(output, label)
+    try:
+        return float(str(value).replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def format_optional_metric(value):
+    if value is None:
+        return "-"
+    return f"{value:.3f}"
+
+
+def weighted_precision_recall_f1(output):
+    confusion_csv = output.get("download_data", {}).get("confusion_matrix")
+    if not confusion_csv:
+        return None, None, None
+
+    confusion = pd.read_csv(StringIO(confusion_csv), index_col=0)
+    confusion.index = confusion.index.map(str)
+    confusion.columns = confusion.columns.map(str)
+    labels = sorted(set(confusion.index) | set(confusion.columns))
+    confusion = confusion.reindex(index=labels, columns=labels, fill_value=0).astype(float)
+    supports = confusion.sum(axis=1)
+    total = float(supports.sum())
+    if total <= 0:
+        return None, None, None
+
+    precision_values = []
+    recall_values = []
+    f1_values = []
+    weights = []
+    for label in labels:
+        support = float(supports.loc[label])
+        if support <= 0:
+            continue
+        true_positive = float(confusion.loc[label, label])
+        predicted_positive = float(confusion[label].sum())
+        precision = true_positive / predicted_positive if predicted_positive else 0.0
+        recall = true_positive / support
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+        precision_values.append(precision)
+        recall_values.append(recall)
+        f1_values.append(f1)
+        weights.append(support / total)
+
+    if not weights:
+        return None, None, None
+    return (
+        float(np.average(precision_values, weights=weights)),
+        float(np.average(recall_values, weights=weights)),
+        float(np.average(f1_values, weights=weights)),
+    )
+
+
+def register_comparison_download(tab, comparison):
+    current_id = dataset_id()
+    if not current_id:
+        return None
+
+    DOWNLOADS.setdefault(current_id, {}).setdefault(tab["form_name"], {})["model_comparison"] = comparison.to_csv(index=False)
+    return {
+        "href": url_for("download_result", result_type=tab["form_name"], artifact="model_comparison"),
+        "label": "Download model comparison CSV",
+    }
+
+
+def comparison_html(rows):
+    comparison = pd.DataFrame(rows)
+    display_columns = ["Model", "Test accuracy", "CV accuracy", "Precision", "Recall", "F1", "Status"]
+    comparison = comparison[display_columns]
+    return comparison.to_html(index=False, border=0, classes="model-comparison"), comparison
+
+
+def handle_classification_comparison_submission(tab, dataset):
+    successful_outputs = []
+    rows = []
+
+    for model_name in tab["selected_models"]:
+        model_label = CLASSIFICATION_MODEL_LABELS.get(model_name, model_name)
+        try:
+            fit_model = CLASSIFICATION_MODEL_FITTERS.get(model_name, fit_logistic_regression)
+            output = fit_model(
+                dataset["data"],
+                tab["selected_target"],
+                tab["selected_predictors"],
+                tab["selected_test_size"],
+                tab["selected_cv_folds"],
+            )
+            accuracy = metric_float(output, "Test accuracy")
+            cv_accuracy = metric_float(output, "CV accuracy mean")
+            precision, recall, f1 = weighted_precision_recall_f1(output)
+            rows.append(
+                {
+                    "Model": model_label,
+                    "Test accuracy": format_optional_metric(accuracy),
+                    "CV accuracy": format_optional_metric(cv_accuracy),
+                    "Precision": format_optional_metric(precision),
+                    "Recall": format_optional_metric(recall),
+                    "F1": format_optional_metric(f1),
+                    "Status": "Fit",
+                    "_accuracy": accuracy if accuracy is not None else -1.0,
+                    "_model_name": model_name,
+                }
+            )
+            successful_outputs.append((model_name, output, accuracy if accuracy is not None else -1.0))
+        except Exception as exc:
+            rows.append(
+                {
+                    "Model": model_label,
+                    "Test accuracy": "-",
+                    "CV accuracy": "-",
+                    "Precision": "-",
+                    "Recall": "-",
+                    "F1": "-",
+                    "Status": str(exc),
+                    "_accuracy": -1.0,
+                    "_model_name": model_name,
+                }
+            )
+
+    if not rows:
+        tab["error"] = "Select at least one model."
+        return
+
+    best_model_name = None
+    best_output = None
+    if successful_outputs:
+        best_model_name, best_output, _ = max(successful_outputs, key=lambda item: item[2])
+        tab["selected_model"] = best_model_name
+        tab["selected_models"] = [row["_model_name"] for row in rows]
+        tab["output"] = register_downloads(tab["form_name"], best_output)
+        for row in rows:
+            if row["_model_name"] == best_model_name:
+                row["Status"] = "Best"
+                break
+    else:
+        tab["error"] = "No selected model could be fit."
+
+    table_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
+    tab["comparison_html"], comparison = comparison_html(table_rows)
+    tab["comparison_download"] = register_comparison_download(tab, comparison)
 def handle_classification_submission(tab, dataset):
     populate_tab_from_request(tab)
 
@@ -1883,6 +2070,8 @@ def handle_classification_submission(tab, dataset):
         tab["error"] = "Upload a dataset on the Data tab before running classification."
     elif not tab["selected_target"] or not tab["selected_predictors"]:
         tab["error"] = "Select a target column and at least one predictor."
+    elif tab.get("allow_model_comparison"):
+        handle_classification_comparison_submission(tab, dataset)
     else:
         try:
             fit_model = CLASSIFICATION_MODEL_FITTERS.get(tab["selected_model"], fit_logistic_regression)
@@ -1896,7 +2085,6 @@ def handle_classification_submission(tab, dataset):
             tab["output"] = register_downloads(tab["form_name"], output)
         except Exception as exc:
             tab["error"] = str(exc)
-
 
 def handle_regression_submission(tab, dataset):
     populate_tab_from_request(tab)
