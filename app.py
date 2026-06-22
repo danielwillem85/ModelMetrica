@@ -299,6 +299,24 @@ PAGE_TEMPLATE = """
                 {{ tab.output.details_html|safe }}
               </div>
             {% endif %}
+            {% if tab.output.predicted_actual_plot %}
+              <h3>Predicted vs actual</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ tab.output.predicted_actual_plot }}" alt="Predicted vs actual plot">
+              </div>
+            {% endif %}
+            {% if tab.output.residuals_fitted_plot %}
+              <h3>Residuals vs fitted</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ tab.output.residuals_fitted_plot }}" alt="Residuals vs fitted plot">
+              </div>
+            {% endif %}
+            {% if tab.output.residual_distribution_plot %}
+              <h3>Residual distribution</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ tab.output.residual_distribution_plot }}" alt="Residual distribution plot">
+              </div>
+            {% endif %}
           </div>
         {% endif %}
       </section>
@@ -2125,6 +2143,94 @@ def add_binary_classification_analytics(output, data, target, predictors, model_
         output["pr_plot"] = None
         output["threshold_html"] = None
     return output
+
+def scatter_plot_image(x_values, y_values, xlabel, ylabel, title, identity_line=False, zero_line=False):
+    fig, ax = plt.subplots(figsize=(7.5, 5.2))
+    ax.scatter(x_values, y_values, color="#176b87", alpha=0.72, edgecolor="#0f4f63", linewidth=0.35)
+    if identity_line:
+        lower = min(float(np.min(x_values)), float(np.min(y_values)))
+        upper = max(float(np.max(x_values)), float(np.max(y_values)))
+        ax.plot([lower, upper], [lower, upper], color="#94a3b8", linestyle="--", linewidth=1.4)
+        ax.set_xlim(lower, upper)
+        ax.set_ylim(lower, upper)
+    if zero_line:
+        ax.axhline(0, color="#94a3b8", linestyle="--", linewidth=1.4)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, color="#e2e8f0", linewidth=0.8)
+    buffer = BytesIO()
+    fig.tight_layout()
+    fig.savefig(buffer, format="png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def histogram_plot_image(values, xlabel, title):
+    fig, ax = plt.subplots(figsize=(7.5, 5.2))
+    bins = min(30, max(8, int(math.sqrt(len(values)))))
+    ax.hist(values, bins=bins, color="#176b87", alpha=0.78, edgecolor="#0f4f63")
+    ax.axvline(0, color="#94a3b8", linestyle="--", linewidth=1.4)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Count")
+    ax.set_title(title)
+    ax.grid(True, axis="y", color="#e2e8f0", linewidth=0.8)
+    buffer = BytesIO()
+    fig.tight_layout()
+    fig.savefig(buffer, format="png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def add_regression_analytics(output, data, target, predictors, model_name, test_size):
+    try:
+        y, x_encoded = prepare_regression_data(data, target, predictors)
+        split = split_regression_data(y, x_encoded, test_size)
+        estimator = regression_estimator(model_name)
+        estimator.fit(split["x_train"], split["y_train"])
+        predictions = estimator.predict(split["x_test"])
+        residuals = split["y_test"] - predictions
+        diagnostics = pd.DataFrame(
+            {
+                "Actual": split["y_test"],
+                "Predicted": predictions,
+                "Residual": residuals,
+            }
+        )
+
+        output["predicted_actual_plot"] = scatter_plot_image(
+            split["y_test"],
+            predictions,
+            "Actual",
+            "Predicted",
+            "Predicted vs actual",
+            identity_line=True,
+        )
+        output["residuals_fitted_plot"] = scatter_plot_image(
+            predictions,
+            residuals,
+            "Fitted value",
+            "Residual",
+            "Residuals vs fitted",
+            zero_line=True,
+        )
+        output["residual_distribution_plot"] = histogram_plot_image(
+            residuals,
+            "Residual",
+            "Residual distribution",
+        )
+        output.setdefault("download_data", {})["residual_diagnostics"] = diagnostics.to_csv(index=False)
+        output.setdefault("metrics", []).extend(
+            [
+                {"label": "Residual mean", "value": f"{np.mean(residuals):.3f}"},
+                {"label": "Residual SD", "value": f"{np.std(residuals, ddof=1):.3f}" if len(residuals) > 1 else "0.000"},
+            ]
+        )
+    except Exception:
+        output["predicted_actual_plot"] = None
+        output["residuals_fitted_plot"] = None
+        output["residual_distribution_plot"] = None
+    return output
 def register_comparison_download(tab, comparison):
     current_id = dataset_id()
     if not current_id:
@@ -2311,6 +2417,14 @@ def handle_regression_comparison_submission(tab, dataset):
         best_model_name, best_output, _ = min(successful_outputs, key=lambda item: item[2])
         tab["selected_model"] = best_model_name
         tab["selected_models"] = [row["_model_name"] for row in rows]
+        best_output = add_regression_analytics(
+            best_output,
+            dataset["data"],
+            tab["selected_target"],
+            tab["selected_predictors"],
+            best_model_name,
+            tab["selected_test_size"],
+        )
         tab["output"] = register_downloads(tab["form_name"], best_output)
         for row in rows:
             if row["_model_name"] == best_model_name:
