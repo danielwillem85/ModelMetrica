@@ -322,6 +322,8 @@ PAGE_TEMPLATE = """
         <a class="tab {{ 'active' if active_tab == 'data' else '' }}" href="#data">Data</a>
         <a class="tab {{ 'active' if active_tab == 'classification' else '' }}" href="#classification">Classification</a>
         <a class="tab {{ 'active' if active_tab == 'regression' else '' }}" href="#regression">Regression</a>
+        <a class="tab {{ 'active' if active_tab == 'pro_classification' else '' }}" href="#pro_classification">Pro classification</a>
+        <a class="tab {{ 'active' if active_tab == 'pro_regression' else '' }}" href="#pro_regression">Pro regression</a>
       </nav>
 
       <section id="data" class="tab-panel {{ 'active' if active_tab == 'data' else '' }}">
@@ -578,6 +580,220 @@ PAGE_TEMPLATE = """
           </div>
         {% endif %}
       </section>
+      <section id="pro_classification" class="tab-panel {{ 'active' if active_tab == 'pro_classification' else '' }}">
+        <div class="panel">
+          {% if not has_data %}
+            <p class="error">Upload a dataset on the Data tab before running classification.</p>
+          {% else %}
+            <form method="post">
+              <input type="hidden" name="form_name" value="pro_classification">
+              <input type="hidden" name="active_tab" value="pro_classification">
+              <div>
+                <label for="pro_classification_model">Model type</label>
+                <select id="pro_classification_model" name="pro_classification_model" required>
+                  <option value="logistic" {{ 'selected' if selected_pro_classification_model == 'logistic' else '' }}>Logistic regression</option>
+                  <option value="tree" {{ 'selected' if selected_pro_classification_model == 'tree' else '' }}>Tree model</option>
+                  <option value="random_forest" {{ 'selected' if selected_pro_classification_model == 'random_forest' else '' }}>Random Forest</option>
+                  <option value="gradient_boosting" {{ 'selected' if selected_pro_classification_model == 'gradient_boosting' else '' }}>Gradient Boosting</option>
+                  <option value="svm" {{ 'selected' if selected_pro_classification_model == 'svm' else '' }}>Support Vector Machine</option>
+                  <option value="knn" {{ 'selected' if selected_pro_classification_model == 'knn' else '' }}>kNN</option>
+                </select>
+              </div>
+              <div>
+                <label for="pro_classification_target">Target column</label>
+                <select id="pro_classification_target" name="pro_classification_target" required>
+                  {% for column in columns %}
+                    <option value="{{ column }}" {{ 'selected' if column == selected_pro_target else '' }}>{{ column }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div>
+                <label for="pro_classification_predictors">Predictor columns</label>
+                <select id="pro_classification_predictors" name="pro_classification_predictors" multiple required>
+                  {% for column in columns %}
+                    <option value="{{ column }}" {{ 'selected' if column in selected_pro_predictors else '' }}>{{ column }}</option>
+                  {% endfor %}
+                </select>
+                <p>Select one or more predictors. Logistic regression requires exactly two target classes.</p>
+              </div>
+              <div>
+                <label for="pro_classification_test_size">Test set size</label>
+                <select id="pro_classification_test_size" name="pro_classification_test_size" required>
+                  <option value="0.2" {{ 'selected' if selected_pro_classification_test_size == 0.2 else '' }}>20%</option>
+                  <option value="0.25" {{ 'selected' if selected_pro_classification_test_size == 0.25 else '' }}>25%</option>
+                  <option value="0.3" {{ 'selected' if selected_pro_classification_test_size == 0.3 else '' }}>30%</option>
+                  <option value="0.4" {{ 'selected' if selected_pro_classification_test_size == 0.4 else '' }}>40%</option>
+                </select>
+              </div>
+              <div>
+                <label for="pro_classification_cv_folds">Cross-validation</label>
+                <select id="pro_classification_cv_folds" name="pro_classification_cv_folds" required>
+                  <option value="0" {{ 'selected' if selected_pro_classification_cv_folds == 0 else '' }}>Off</option>
+                  <option value="3" {{ 'selected' if selected_pro_classification_cv_folds == 3 else '' }}>3 folds</option>
+                  <option value="5" {{ 'selected' if selected_pro_classification_cv_folds == 5 else '' }}>5 folds</option>
+                  <option value="10" {{ 'selected' if selected_pro_classification_cv_folds == 10 else '' }}>10 folds</option>
+                </select>
+              </div>
+              <div>
+                <button type="submit">Run</button>
+              </div>
+            </form>
+          {% endif %}
+          {% if pro_classification_error %}
+            <p class="error">{{ pro_classification_error }}</p>
+          {% endif %}
+        </div>
+
+        {% if pro_model_output %}
+          <div class="panel">
+            <h2>{{ pro_model_output.title }}</h2>
+            <p>{{ pro_model_output.description }}</p>
+            {% if pro_model_output.downloads %}
+              <div class="download-links">
+                {% for download in pro_model_output.downloads %}
+                  <a href="{{ download.href }}">{{ download.label }}</a>
+                {% endfor %}
+              </div>
+            {% endif %}
+            <div class="metric-row">
+              {% for metric in pro_model_output.metrics %}
+                <div class="metric"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
+              {% endfor %}
+            </div>
+            {% if pro_model_output.coefficients_html %}
+              <h3>Coefficients</h3>
+              <div class="table-wrap">
+                {{ pro_model_output.coefficients_html|safe }}
+              </div>
+            {% endif %}
+            {% if pro_model_output.importances_html %}
+              <h3>Variable importance</h3>
+              <div class="table-wrap">
+                {{ pro_model_output.importances_html|safe }}
+              </div>
+            {% endif %}
+            {% if pro_model_output.details_html %}
+              <h3>Model details</h3>
+              <div class="table-wrap">
+                {{ pro_model_output.details_html|safe }}
+              </div>
+            {% endif %}
+            <h3>Confusion matrix</h3>
+            <div class="table-wrap">
+              {{ pro_model_output.confusion_html|safe }}
+            </div>
+            {% if pro_model_output.tree_plot %}
+              <h3>Tree structure</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ pro_model_output.tree_plot }}" alt="Classification tree plot">
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+      </section>
+
+      <section id="pro_regression" class="tab-panel {{ 'active' if active_tab == 'pro_regression' else '' }}">
+        <div class="panel">
+          {% if not has_data %}
+            <p class="error">Upload a dataset on the Data tab before running regression.</p>
+          {% else %}
+            <form method="post">
+              <input type="hidden" name="form_name" value="pro_regression">
+              <input type="hidden" name="active_tab" value="pro_regression">
+              <div>
+                <label for="pro_regression_model">Model type</label>
+                <select id="pro_regression_model" name="pro_regression_model" required>
+                  <option value="linear" {{ 'selected' if selected_pro_regression_model == 'linear' else '' }}>Linear Regression</option>
+                  <option value="ridge" {{ 'selected' if selected_pro_regression_model == 'ridge' else '' }}>Ridge Regression</option>
+                  <option value="lasso" {{ 'selected' if selected_pro_regression_model == 'lasso' else '' }}>Lasso Regression</option>
+                  <option value="random_forest" {{ 'selected' if selected_pro_regression_model == 'random_forest' else '' }}>Random Forest Regression</option>
+                  <option value="gradient_boosting" {{ 'selected' if selected_pro_regression_model == 'gradient_boosting' else '' }}>Gradient Boosting Regression</option>
+                  <option value="svr" {{ 'selected' if selected_pro_regression_model == 'svr' else '' }}>Support Vector Regression</option>
+                  <option value="knn" {{ 'selected' if selected_pro_regression_model == 'knn' else '' }}>kNN Regression</option>
+                </select>
+              </div>
+              <div>
+                <label for="pro_regression_target">Numeric target column</label>
+                <select id="pro_regression_target" name="pro_regression_target" required>
+                  {% for column in columns %}
+                    <option value="{{ column }}" {{ 'selected' if column == selected_pro_regression_target else '' }}>{{ column }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div>
+                <label for="pro_regression_predictors">Predictor columns</label>
+                <select id="pro_regression_predictors" name="pro_regression_predictors" multiple required>
+                  {% for column in columns %}
+                    <option value="{{ column }}" {{ 'selected' if column in selected_pro_regression_predictors else '' }}>{{ column }}</option>
+                  {% endfor %}
+                </select>
+                <p>Select one or more predictors. Categorical predictors are automatically encoded.</p>
+              </div>
+              <div>
+                <label for="pro_regression_test_size">Test set size</label>
+                <select id="pro_regression_test_size" name="pro_regression_test_size" required>
+                  <option value="0.2" {{ 'selected' if selected_pro_regression_test_size == 0.2 else '' }}>20%</option>
+                  <option value="0.25" {{ 'selected' if selected_pro_regression_test_size == 0.25 else '' }}>25%</option>
+                  <option value="0.3" {{ 'selected' if selected_pro_regression_test_size == 0.3 else '' }}>30%</option>
+                  <option value="0.4" {{ 'selected' if selected_pro_regression_test_size == 0.4 else '' }}>40%</option>
+                </select>
+              </div>
+              <div>
+                <label for="pro_regression_cv_folds">Cross-validation</label>
+                <select id="pro_regression_cv_folds" name="pro_regression_cv_folds" required>
+                  <option value="0" {{ 'selected' if selected_pro_regression_cv_folds == 0 else '' }}>Off</option>
+                  <option value="3" {{ 'selected' if selected_pro_regression_cv_folds == 3 else '' }}>3 folds</option>
+                  <option value="5" {{ 'selected' if selected_pro_regression_cv_folds == 5 else '' }}>5 folds</option>
+                  <option value="10" {{ 'selected' if selected_pro_regression_cv_folds == 10 else '' }}>10 folds</option>
+                </select>
+              </div>
+              <div>
+                <button type="submit">Run</button>
+              </div>
+            </form>
+          {% endif %}
+          {% if pro_regression_error %}
+            <p class="error">{{ pro_regression_error }}</p>
+          {% endif %}
+        </div>
+
+        {% if pro_regression_output %}
+          <div class="panel">
+            <h2>{{ pro_regression_output.title }}</h2>
+            <p>{{ pro_regression_output.description }}</p>
+            {% if pro_regression_output.downloads %}
+              <div class="download-links">
+                {% for download in pro_regression_output.downloads %}
+                  <a href="{{ download.href }}">{{ download.label }}</a>
+                {% endfor %}
+              </div>
+            {% endif %}
+            <div class="metric-row">
+              {% for metric in pro_regression_output.metrics %}
+                <div class="metric"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
+              {% endfor %}
+            </div>
+            {% if pro_regression_output.coefficients_html %}
+              <h3>Coefficients</h3>
+              <div class="table-wrap">
+                {{ pro_regression_output.coefficients_html|safe }}
+              </div>
+            {% endif %}
+            {% if pro_regression_output.importances_html %}
+              <h3>Variable importance</h3>
+              <div class="table-wrap">
+                {{ pro_regression_output.importances_html|safe }}
+              </div>
+            {% endif %}
+            {% if pro_regression_output.details_html %}
+              <h3>Model details</h3>
+              <div class="table-wrap">
+                {{ pro_regression_output.details_html|safe }}
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+      </section>
     </main>
     {% endif %}
     {% if not is_authenticated %}
@@ -624,7 +840,8 @@ PAGE_TEMPLATE = """
       const panels = document.querySelectorAll(".tab-panel");
 
       function activateTab(hash) {
-        const target = ["#classification", "#regression"].includes(hash) ? hash.slice(1) : "data";
+        const validTabs = ["#classification", "#regression", "#pro_classification", "#pro_regression"];
+        const target = validTabs.includes(hash) ? hash.slice(1) : "data";
         tabs.forEach((tab) => tab.classList.toggle("active", tab.getAttribute("href") === `#${target}`));
         panels.forEach((panel) => panel.classList.toggle("active", panel.id === target));
       }
@@ -1754,18 +1971,32 @@ def index():
     data_error = None
     classification_error = None
     regression_error = None
+    pro_classification_error = None
+    pro_regression_error = None
     model_output = None
     regression_output = None
+    pro_model_output = None
+    pro_regression_output = None
     selected_classification_model = "logistic"
     selected_regression_model = "linear"
+    selected_pro_classification_model = "logistic"
+    selected_pro_regression_model = "linear"
     selected_classification_test_size = 0.2
     selected_regression_test_size = 0.2
+    selected_pro_classification_test_size = 0.2
+    selected_pro_regression_test_size = 0.2
     selected_classification_cv_folds = 0
     selected_regression_cv_folds = 0
+    selected_pro_classification_cv_folds = 0
+    selected_pro_regression_cv_folds = 0
     selected_target = None
     selected_predictors = []
+    selected_pro_target = None
+    selected_pro_predictors = []
     selected_regression_target = None
     selected_regression_predictors = []
+    selected_pro_regression_target = None
+    selected_pro_regression_predictors = []
     form_name = request.form.get("form_name")
 
     if request.method == "POST" and form_name == "signup":
@@ -1881,6 +2112,75 @@ def index():
             except Exception as exc:
                 regression_error = str(exc)
 
+    if authenticated and request.method == "POST" and form_name == "pro_classification":
+        active_tab = "pro_classification"
+        selected_pro_classification_model = request.form.get("pro_classification_model", "logistic")
+        selected_pro_classification_test_size = parse_test_size(request.form.get("pro_classification_test_size"))
+        selected_pro_classification_cv_folds = parse_cv_folds(request.form.get("pro_classification_cv_folds"))
+        selected_pro_target = request.form.get("pro_classification_target")
+        selected_pro_predictors = request.form.getlist("pro_classification_predictors")
+
+        if dataset is None:
+            pro_classification_error = "Upload a dataset on the Data tab before running classification."
+        elif not selected_pro_target or not selected_pro_predictors:
+            pro_classification_error = "Select a target column and at least one predictor."
+        else:
+            try:
+                pro_classification_models = {
+                    "logistic": fit_logistic_regression,
+                    "tree": fit_tree_model,
+                    "random_forest": fit_random_forest_model,
+                    "gradient_boosting": fit_gradient_boosting_model,
+                    "svm": fit_svm_model,
+                    "knn": fit_knn_model,
+                }
+                fit_model = pro_classification_models.get(selected_pro_classification_model, fit_logistic_regression)
+                pro_model_output = fit_model(
+                    dataset["data"],
+                    selected_pro_target,
+                    selected_pro_predictors,
+                    selected_pro_classification_test_size,
+                    selected_pro_classification_cv_folds,
+                )
+                pro_model_output = register_downloads("pro_classification", pro_model_output)
+            except Exception as exc:
+                pro_classification_error = str(exc)
+
+    if authenticated and request.method == "POST" and form_name == "pro_regression":
+        active_tab = "pro_regression"
+        selected_pro_regression_model = request.form.get("pro_regression_model", "linear")
+        selected_pro_regression_test_size = parse_test_size(request.form.get("pro_regression_test_size"))
+        selected_pro_regression_cv_folds = parse_cv_folds(request.form.get("pro_regression_cv_folds"))
+        selected_pro_regression_target = request.form.get("pro_regression_target")
+        selected_pro_regression_predictors = request.form.getlist("pro_regression_predictors")
+
+        if dataset is None:
+            pro_regression_error = "Upload a dataset on the Data tab before running regression."
+        elif not selected_pro_regression_target or not selected_pro_regression_predictors:
+            pro_regression_error = "Select a target column and at least one predictor."
+        else:
+            try:
+                pro_regression_models = {
+                    "linear": fit_linear_regression,
+                    "ridge": fit_ridge_regression,
+                    "lasso": fit_lasso_regression,
+                    "random_forest": fit_random_forest_regression,
+                    "gradient_boosting": fit_gradient_boosting_regression,
+                    "svr": fit_svr_regression,
+                    "knn": fit_knn_regression,
+                }
+                fit_model = pro_regression_models.get(selected_pro_regression_model, fit_linear_regression)
+                pro_regression_output = fit_model(
+                    dataset["data"],
+                    selected_pro_regression_target,
+                    selected_pro_regression_predictors,
+                    selected_pro_regression_test_size,
+                    selected_pro_regression_cv_folds,
+                )
+                pro_regression_output = register_downloads("pro_regression", pro_regression_output)
+            except Exception as exc:
+                pro_regression_error = str(exc)
+
     has_data = dataset is not None
     data = dataset["data"] if has_data else None
     filename = dataset["filename"] if has_data else None
@@ -1890,6 +2190,10 @@ def index():
         selected_target = columns[0]
         selected_predictors = columns[1:]
 
+    if has_data and selected_pro_target is None:
+        selected_pro_target = columns[0]
+        selected_pro_predictors = columns[1:]
+
     if has_data and selected_regression_target is None:
         numeric_columns = list(data.select_dtypes(include="number").columns)
         if numeric_columns:
@@ -1898,6 +2202,15 @@ def index():
         else:
             selected_regression_target = columns[0]
             selected_regression_predictors = columns[1:]
+
+    if has_data and selected_pro_regression_target is None:
+        numeric_columns = list(data.select_dtypes(include="number").columns)
+        if numeric_columns:
+            selected_pro_regression_target = "regression_target" if "regression_target" in numeric_columns else numeric_columns[0]
+            selected_pro_regression_predictors = [column for column in numeric_columns if column != selected_pro_regression_target]
+        else:
+            selected_pro_regression_target = columns[0]
+            selected_pro_regression_predictors = columns[1:]
 
     table_html = preview_table(data) if has_data else None
     row_count = min(25, len(data)) if has_data else 0
@@ -1912,6 +2225,8 @@ def index():
         data_error=data_error,
         classification_error=classification_error,
         regression_error=regression_error,
+        pro_classification_error=pro_classification_error,
+        pro_regression_error=pro_regression_error,
         table_html=table_html,
         filename=filename,
         row_count=row_count,
@@ -1923,13 +2238,25 @@ def index():
         selected_classification_cv_folds=selected_classification_cv_folds,
         selected_target=selected_target,
         selected_predictors=selected_predictors,
+        selected_pro_classification_model=selected_pro_classification_model,
+        selected_pro_classification_test_size=selected_pro_classification_test_size,
+        selected_pro_classification_cv_folds=selected_pro_classification_cv_folds,
+        selected_pro_target=selected_pro_target,
+        selected_pro_predictors=selected_pro_predictors,
         selected_regression_model=selected_regression_model,
         selected_regression_test_size=selected_regression_test_size,
         selected_regression_cv_folds=selected_regression_cv_folds,
         selected_regression_target=selected_regression_target,
         selected_regression_predictors=selected_regression_predictors,
+        selected_pro_regression_model=selected_pro_regression_model,
+        selected_pro_regression_test_size=selected_pro_regression_test_size,
+        selected_pro_regression_cv_folds=selected_pro_regression_cv_folds,
+        selected_pro_regression_target=selected_pro_regression_target,
+        selected_pro_regression_predictors=selected_pro_regression_predictors,
         model_output=model_output,
         regression_output=regression_output,
+        pro_model_output=pro_model_output,
+        pro_regression_output=pro_regression_output,
     )
 
 
