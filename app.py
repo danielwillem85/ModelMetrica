@@ -1885,6 +1885,7 @@ CLASSIFICATION_TAB_CONFIGS = {
         "id": "pro_classification",
         "form_name": "pro_classification",
         "model_field": "pro_classification_model",
+        "detail_model_field": "pro_classification_detail_model",
         "target_field": "pro_classification_target",
         "predictors_field": "pro_classification_predictors",
         "test_size_field": "pro_classification_test_size",
@@ -1909,6 +1910,7 @@ REGRESSION_TAB_CONFIGS = {
         "id": "pro_regression",
         "form_name": "pro_regression",
         "model_field": "pro_regression_model",
+        "detail_model_field": "pro_regression_detail_model",
         "target_field": "pro_regression_target",
         "predictors_field": "pro_regression_predictors",
         "test_size_field": "pro_regression_test_size",
@@ -2281,6 +2283,24 @@ def comparison_html(rows, display_columns):
     return comparison.to_html(index=False, border=0, classes="model-comparison"), comparison
 
 
+
+def choose_detail_model(tab, successful_outputs, best_model_name):
+    output_by_model = {model_name: output for model_name, output, _ in successful_outputs}
+    selected_detail_model = tab.get("selected_detail_model", "best")
+    if selected_detail_model != "best" and selected_detail_model in output_by_model:
+        return selected_detail_model, output_by_model[selected_detail_model]
+    tab["selected_detail_model"] = "best"
+    return best_model_name, output_by_model[best_model_name]
+
+
+def comparison_row_status(model_name, best_model_name, detail_model_name):
+    labels = []
+    if model_name == best_model_name:
+        labels.append("Best")
+    if model_name == detail_model_name:
+        labels.append("Detailed")
+    return " / ".join(labels) if labels else "Fit"
+
 def handle_classification_comparison_submission(tab, dataset):
     successful_outputs = []
     rows = []
@@ -2333,24 +2353,22 @@ def handle_classification_comparison_submission(tab, dataset):
         return
 
     best_model_name = None
-    best_output = None
     if successful_outputs:
-        best_model_name, best_output, _ = max(successful_outputs, key=lambda item: item[2])
-        tab["selected_model"] = best_model_name
+        best_model_name, _, _ = max(successful_outputs, key=lambda item: item[2])
+        detail_model_name, detail_output = choose_detail_model(tab, successful_outputs, best_model_name)
+        tab["selected_model"] = detail_model_name
         tab["selected_models"] = [row["_model_name"] for row in rows]
-        best_output = add_binary_classification_analytics(
-            best_output,
+        detail_output = add_binary_classification_analytics(
+            detail_output,
             dataset["data"],
             tab["selected_target"],
             tab["selected_predictors"],
-            best_model_name,
+            detail_model_name,
             tab["selected_test_size"],
         )
-        tab["output"] = register_downloads(tab["form_name"], best_output)
+        tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
-            if row["_model_name"] == best_model_name:
-                row["Status"] = "Best"
-                break
+            row["Status"] = comparison_row_status(row["_model_name"], best_model_name, detail_model_name)
     else:
         tab["error"] = "No selected model could be fit."
 
@@ -2446,22 +2464,21 @@ def handle_regression_comparison_submission(tab, dataset):
         return
 
     if successful_outputs:
-        best_model_name, best_output, _ = min(successful_outputs, key=lambda item: item[2])
-        tab["selected_model"] = best_model_name
+        best_model_name, _, _ = min(successful_outputs, key=lambda item: item[2])
+        detail_model_name, detail_output = choose_detail_model(tab, successful_outputs, best_model_name)
+        tab["selected_model"] = detail_model_name
         tab["selected_models"] = [row["_model_name"] for row in rows]
-        best_output = add_regression_analytics(
-            best_output,
+        detail_output = add_regression_analytics(
+            detail_output,
             dataset["data"],
             tab["selected_target"],
             tab["selected_predictors"],
-            best_model_name,
+            detail_model_name,
             tab["selected_test_size"],
         )
-        tab["output"] = register_downloads(tab["form_name"], best_output)
+        tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
-            if row["_model_name"] == best_model_name:
-                row["Status"] = "Best"
-                break
+            row["Status"] = comparison_row_status(row["_model_name"], best_model_name, detail_model_name)
     else:
         tab["error"] = "No selected model could be fit."
 
