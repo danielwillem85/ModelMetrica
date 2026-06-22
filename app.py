@@ -19,7 +19,7 @@ from sklearn.ensemble import (
     RandomForestRegressor,
 )
 from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, average_precision_score, auc, precision_recall_curve, roc_curve
 from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.pipeline import make_pipeline
@@ -156,6 +156,24 @@ PAGE_TEMPLATE = """
             <div class="table-wrap">
               {{ tab.output.confusion_html|safe }}
             </div>
+            {% if tab.output.roc_plot %}
+              <h3>ROC curve</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ tab.output.roc_plot }}" alt="ROC curve">
+              </div>
+            {% endif %}
+            {% if tab.output.pr_plot %}
+              <h3>Precision-recall curve</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ tab.output.pr_plot }}" alt="Precision-recall curve">
+              </div>
+            {% endif %}
+            {% if tab.output.threshold_html %}
+              <h3>Threshold analysis</h3>
+              <div class="table-wrap">
+                {{ tab.output.threshold_html|safe }}
+              </div>
+            {% endif %}
             {% if tab.output.tree_plot %}
               <h3>Tree structure</h3>
               <div class="tree-plot">
@@ -179,12 +197,12 @@ PAGE_TEMPLATE = """
               <div>
                 <label for="{{ tab.model_field }}">Model type</label>
                 <select id="{{ tab.model_field }}" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple{% endif %} required>
-                  <option value="linear" {{ 'selected' if tab.selected_model == 'linear' else '' }}>Linear Regression</option>
-                  <option value="ridge" {{ 'selected' if tab.selected_model == 'ridge' else '' }}>Ridge Regression</option>
-                  <option value="lasso" {{ 'selected' if tab.selected_model == 'lasso' else '' }}>Lasso Regression</option>
+                  <option value="linear" {{ 'selected' if 'linear' in tab.selected_models else '' }}>Linear Regression</option>
+                  <option value="ridge" {{ 'selected' if 'ridge' in tab.selected_models else '' }}>Ridge Regression</option>
+                  <option value="lasso" {{ 'selected' if 'lasso' in tab.selected_models else '' }}>Lasso Regression</option>
                   <option value="random_forest" {{ 'selected' if 'random_forest' in tab.selected_models else '' }}>Random Forest Regression</option>
                   <option value="gradient_boosting" {{ 'selected' if 'gradient_boosting' in tab.selected_models else '' }}>Gradient Boosting Regression</option>
-                  <option value="svr" {{ 'selected' if tab.selected_model == 'svr' else '' }}>Support Vector Regression</option>
+                  <option value="svr" {{ 'selected' if 'svr' in tab.selected_models else '' }}>Support Vector Regression</option>
                   <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN Regression</option>
                 </select>
               </div>
@@ -233,6 +251,20 @@ PAGE_TEMPLATE = """
           {% endif %}
         </div>
 
+        {% if tab.comparison_html %}
+          <div class="panel">
+            <h2>Model comparison</h2>
+            <p>Detailed results below show the best model by test RMSE.</p>
+            {% if tab.comparison_download %}
+              <div class="download-links">
+                <a href="{{ tab.comparison_download.href }}">{{ tab.comparison_download.label }}</a>
+              </div>
+            {% endif %}
+            <div class="table-wrap">
+              {{ tab.comparison_html|safe }}
+            </div>
+          </div>
+        {% endif %}
         {% if tab.output %}
           <div class="panel">
             <h2>{{ tab.output.title }}</h2>
@@ -891,7 +923,7 @@ def classification_estimator(model_name):
     if model_name == "gradient_boosting":
         return GradientBoostingClassifier(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
     if model_name == "svm":
-        return make_pipeline(StandardScaler(), SVC(kernel="rbf", C=1.0, gamma="scale", random_state=42))
+        return make_pipeline(StandardScaler(), SVC(kernel="rbf", C=1.0, gamma="scale", probability=True, random_state=42))
     if model_name == "knn":
         return make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=5, weights="distance"))
     raise ValueError("Unknown classification model.")
@@ -1835,6 +1867,7 @@ REGRESSION_TAB_CONFIGS = {
         "test_size_field": "pro_regression_test_size",
         "cv_folds_field": "pro_regression_cv_folds",
         "default_model": "linear",
+        "allow_model_comparison": True,
     },
 }
 
@@ -1886,10 +1919,17 @@ def apply_regression_defaults(tab, data, columns):
         tab["selected_predictors"] = columns[1:]
 
 
+def available_model_names(tab):
+    if tab["form_name"] in REGRESSION_TAB_CONFIGS:
+        return set(REGRESSION_MODEL_FITTERS)
+    return set(CLASSIFICATION_MODEL_FITTERS)
+
+
 def populate_tab_from_request(tab):
     if tab.get("allow_model_comparison"):
         selected_models = request.form.getlist(tab["model_field"]) or [tab["default_model"]]
-        tab["selected_models"] = [model for model in selected_models if model in CLASSIFICATION_MODEL_FITTERS]
+        allowed_models = available_model_names(tab)
+        tab["selected_models"] = [model for model in selected_models if model in allowed_models]
         if not tab["selected_models"]:
             tab["selected_models"] = [tab["default_model"]]
         tab["selected_model"] = tab["selected_models"][0]
@@ -1901,7 +1941,6 @@ def populate_tab_from_request(tab):
     tab["selected_cv_folds"] = parse_cv_folds(request.form.get(tab["cv_folds_field"]))
     tab["selected_target"] = request.form.get(tab["target_field"])
     tab["selected_predictors"] = request.form.getlist(tab["predictors_field"])
-
 
 CLASSIFICATION_MODEL_LABELS = {
     "logistic": "Logistic regression",
@@ -1976,6 +2015,116 @@ def weighted_precision_recall_f1(output):
     )
 
 
+
+def line_plot_image(x_values, y_values, xlabel, ylabel, title, annotation=None, baseline=None):
+    fig, ax = plt.subplots(figsize=(7.5, 5.2))
+    ax.plot(x_values, y_values, color="#176b87", linewidth=2.3)
+    if baseline is not None:
+        ax.plot(baseline["x"], baseline["y"], color="#94a3b8", linestyle="--", linewidth=1.4)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, color="#e2e8f0", linewidth=0.8)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    if annotation:
+        ax.text(
+            0.98,
+            0.04,
+            annotation,
+            ha="right",
+            va="bottom",
+            transform=ax.transAxes,
+            bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "edgecolor": "#d8dee8"},
+        )
+    buffer = BytesIO()
+    fig.tight_layout()
+    fig.savefig(buffer, format="png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def classification_score_values(estimator, x_test):
+    if hasattr(estimator, "predict_proba"):
+        probabilities = estimator.predict_proba(x_test)
+        classes = list(estimator.classes_)
+        positive_index = classes.index(1) if 1 in classes else len(classes) - 1
+        return probabilities[:, positive_index]
+    if hasattr(estimator, "decision_function"):
+        scores = estimator.decision_function(x_test)
+        if np.ndim(scores) > 1:
+            return scores[:, -1]
+        return scores
+    raise ValueError("The selected model does not expose probability or decision scores.")
+
+
+def threshold_analysis_table(y_true, scores):
+    rows = []
+    for threshold in np.arange(0.1, 1.0, 0.1):
+        predicted = scores >= threshold
+        true_positive = int(np.sum((predicted == 1) & (y_true == 1)))
+        false_positive = int(np.sum((predicted == 1) & (y_true == 0)))
+        false_negative = int(np.sum((predicted == 0) & (y_true == 1)))
+        precision = true_positive / (true_positive + false_positive) if (true_positive + false_positive) else 0.0
+        recall = true_positive / (true_positive + false_negative) if (true_positive + false_negative) else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+        rows.append(
+            {
+                "Threshold": f"{threshold:.1f}",
+                "Precision": f"{precision:.3f}",
+                "Recall": f"{recall:.3f}",
+                "F1": f"{f1:.3f}",
+                "Predicted positive": f"{np.mean(predicted):.1%}",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def add_binary_classification_analytics(output, data, target, predictors, model_name, test_size):
+    try:
+        _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True)
+        split = split_classification_data(target_values, x_encoded, test_size)
+        estimator = classification_estimator(model_name)
+        estimator.fit(split["x_train"], split["y_train"])
+        scores = classification_score_values(estimator, split["x_test"])
+        y_true = split["y_test"]
+
+        fpr, tpr, _ = roc_curve(y_true, scores)
+        roc_auc = auc(fpr, tpr)
+        precision, recall, _ = precision_recall_curve(y_true, scores)
+        average_precision = average_precision_score(y_true, scores)
+        threshold_table = threshold_analysis_table(y_true, scores)
+
+        output["roc_plot"] = line_plot_image(
+            fpr,
+            tpr,
+            "False positive rate",
+            "True positive rate",
+            "ROC curve",
+            annotation=f"AUC = {roc_auc:.3f}",
+            baseline={"x": [0, 1], "y": [0, 1]},
+        )
+        output["pr_plot"] = line_plot_image(
+            recall,
+            precision,
+            "Recall",
+            "Precision",
+            "Precision-recall curve",
+            annotation=f"Avg. precision = {average_precision:.3f}",
+        )
+        output["threshold_html"] = threshold_table.to_html(index=False, border=0, classes="threshold-analysis")
+        output.setdefault("download_data", {})["threshold_analysis"] = threshold_table.to_csv(index=False)
+        output.setdefault("metrics", []).extend(
+            [
+                {"label": "ROC AUC", "value": f"{roc_auc:.3f}"},
+                {"label": "Avg. precision", "value": f"{average_precision:.3f}"},
+            ]
+        )
+    except Exception:
+        output["roc_plot"] = None
+        output["pr_plot"] = None
+        output["threshold_html"] = None
+    return output
 def register_comparison_download(tab, comparison):
     current_id = dataset_id()
     if not current_id:
@@ -1988,9 +2137,8 @@ def register_comparison_download(tab, comparison):
     }
 
 
-def comparison_html(rows):
+def comparison_html(rows, display_columns):
     comparison = pd.DataFrame(rows)
-    display_columns = ["Model", "Test accuracy", "CV accuracy", "Precision", "Recall", "F1", "Status"]
     comparison = comparison[display_columns]
     return comparison.to_html(index=False, border=0, classes="model-comparison"), comparison
 
@@ -2052,6 +2200,14 @@ def handle_classification_comparison_submission(tab, dataset):
         best_model_name, best_output, _ = max(successful_outputs, key=lambda item: item[2])
         tab["selected_model"] = best_model_name
         tab["selected_models"] = [row["_model_name"] for row in rows]
+        best_output = add_binary_classification_analytics(
+            best_output,
+            dataset["data"],
+            tab["selected_target"],
+            tab["selected_predictors"],
+            best_model_name,
+            tab["selected_test_size"],
+        )
         tab["output"] = register_downloads(tab["form_name"], best_output)
         for row in rows:
             if row["_model_name"] == best_model_name:
@@ -2061,7 +2217,7 @@ def handle_classification_comparison_submission(tab, dataset):
         tab["error"] = "No selected model could be fit."
 
     table_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
-    tab["comparison_html"], comparison = comparison_html(table_rows)
+    tab["comparison_html"], comparison = comparison_html(table_rows, ["Model", "Test accuracy", "CV accuracy", "Precision", "Recall", "F1", "Status"])
     tab["comparison_download"] = register_comparison_download(tab, comparison)
 def handle_classification_submission(tab, dataset):
     populate_tab_from_request(tab)
@@ -2086,6 +2242,90 @@ def handle_classification_submission(tab, dataset):
         except Exception as exc:
             tab["error"] = str(exc)
 
+
+REGRESSION_MODEL_LABELS = {
+    "linear": "Linear Regression",
+    "ridge": "Ridge Regression",
+    "lasso": "Lasso Regression",
+    "random_forest": "Random Forest Regression",
+    "gradient_boosting": "Gradient Boosting Regression",
+    "svr": "Support Vector Regression",
+    "knn": "kNN Regression",
+}
+
+
+def handle_regression_comparison_submission(tab, dataset):
+    successful_outputs = []
+    rows = []
+
+    for model_name in tab["selected_models"]:
+        model_label = REGRESSION_MODEL_LABELS.get(model_name, model_name)
+        try:
+            fit_model = REGRESSION_MODEL_FITTERS.get(model_name, fit_linear_regression)
+            output = fit_model(
+                dataset["data"],
+                tab["selected_target"],
+                tab["selected_predictors"],
+                tab["selected_test_size"],
+                tab["selected_cv_folds"],
+            )
+            r_squared = metric_float(output, "Test R squared")
+            rmse = metric_float(output, "Test RMSE")
+            mae = metric_float(output, "Test MAE")
+            cv_r_squared = metric_float(output, "CV R squared mean")
+            cv_rmse = metric_float(output, "CV RMSE mean")
+            rows.append(
+                {
+                    "Model": model_label,
+                    "Test R squared": format_optional_metric(r_squared),
+                    "Test RMSE": format_optional_metric(rmse),
+                    "Test MAE": format_optional_metric(mae),
+                    "CV R squared": format_optional_metric(cv_r_squared),
+                    "CV RMSE": format_optional_metric(cv_rmse),
+                    "Status": "Fit",
+                    "_rmse": rmse if rmse is not None else float("inf"),
+                    "_model_name": model_name,
+                }
+            )
+            successful_outputs.append((model_name, output, rmse if rmse is not None else float("inf")))
+        except Exception as exc:
+            rows.append(
+                {
+                    "Model": model_label,
+                    "Test R squared": "-",
+                    "Test RMSE": "-",
+                    "Test MAE": "-",
+                    "CV R squared": "-",
+                    "CV RMSE": "-",
+                    "Status": str(exc),
+                    "_rmse": float("inf"),
+                    "_model_name": model_name,
+                }
+            )
+
+    if not rows:
+        tab["error"] = "Select at least one model."
+        return
+
+    if successful_outputs:
+        best_model_name, best_output, _ = min(successful_outputs, key=lambda item: item[2])
+        tab["selected_model"] = best_model_name
+        tab["selected_models"] = [row["_model_name"] for row in rows]
+        tab["output"] = register_downloads(tab["form_name"], best_output)
+        for row in rows:
+            if row["_model_name"] == best_model_name:
+                row["Status"] = "Best"
+                break
+    else:
+        tab["error"] = "No selected model could be fit."
+
+    table_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
+    tab["comparison_html"], comparison = comparison_html(
+        table_rows,
+        ["Model", "Test R squared", "Test RMSE", "Test MAE", "CV R squared", "CV RMSE", "Status"],
+    )
+    tab["comparison_download"] = register_comparison_download(tab, comparison)
+
 def handle_regression_submission(tab, dataset):
     populate_tab_from_request(tab)
 
@@ -2093,6 +2333,8 @@ def handle_regression_submission(tab, dataset):
         tab["error"] = "Upload a dataset on the Data tab before running regression."
     elif not tab["selected_target"] or not tab["selected_predictors"]:
         tab["error"] = "Select a target column and at least one predictor."
+    elif tab.get("allow_model_comparison"):
+        handle_regression_comparison_submission(tab, dataset)
     else:
         try:
             fit_model = REGRESSION_MODEL_FITTERS.get(tab["selected_model"], fit_linear_regression)
@@ -2106,7 +2348,6 @@ def handle_regression_submission(tab, dataset):
             tab["output"] = register_downloads(tab["form_name"], output)
         except Exception as exc:
             tab["error"] = str(exc)
-
 
 @app.route("/", methods=["GET", "POST"])
 def index():
