@@ -59,6 +59,20 @@ PAGE_TEMPLATE = """
                   <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN</option>
                 </select>
               </div>
+              {% if tab.allow_model_comparison %}
+              <div>
+                <label for="{{ tab.detail_model_field }}">Detail model</label>
+                <select id="{{ tab.detail_model_field }}" name="{{ tab.detail_model_field }}" required>
+                  <option value="best" {{ 'selected' if tab.selected_detail_model == 'best' else '' }}>Auto best</option>
+                  <option value="logistic" {{ 'selected' if tab.selected_detail_model == 'logistic' else '' }}>Logistic regression</option>
+                  <option value="tree" {{ 'selected' if tab.selected_detail_model == 'tree' else '' }}>Tree model</option>
+                  <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest</option>
+                  <option value="gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'gradient_boosting' else '' }}>Gradient Boosting</option>
+                  <option value="svm" {{ 'selected' if tab.selected_detail_model == 'svm' else '' }}>Support Vector Machine</option>
+                  <option value="knn" {{ 'selected' if tab.selected_detail_model == 'knn' else '' }}>kNN</option>
+                </select>
+              </div>
+              {% endif %}
               <div>
                 <label for="{{ tab.target_field }}">Target column</label>
                 <select id="{{ tab.target_field }}" name="{{ tab.target_field }}" required>
@@ -107,7 +121,7 @@ PAGE_TEMPLATE = """
         {% if tab.comparison_html %}
           <div class="panel">
             <h2>Model comparison</h2>
-            <p>Detailed results below show the best model by test accuracy.</p>
+            <p>Detailed results below show the selected detail model, or the best model when Auto best is chosen.</p>
             {% if tab.comparison_download %}
               <div class="download-links">
                 <a href="{{ tab.comparison_download.href }}">{{ tab.comparison_download.label }}</a>
@@ -206,6 +220,21 @@ PAGE_TEMPLATE = """
                   <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN Regression</option>
                 </select>
               </div>
+              {% if tab.allow_model_comparison %}
+              <div>
+                <label for="{{ tab.detail_model_field }}">Detail model</label>
+                <select id="{{ tab.detail_model_field }}" name="{{ tab.detail_model_field }}" required>
+                  <option value="best" {{ 'selected' if tab.selected_detail_model == 'best' else '' }}>Auto best</option>
+                  <option value="linear" {{ 'selected' if tab.selected_detail_model == 'linear' else '' }}>Linear Regression</option>
+                  <option value="ridge" {{ 'selected' if tab.selected_detail_model == 'ridge' else '' }}>Ridge Regression</option>
+                  <option value="lasso" {{ 'selected' if tab.selected_detail_model == 'lasso' else '' }}>Lasso Regression</option>
+                  <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest Regression</option>
+                  <option value="gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'gradient_boosting' else '' }}>Gradient Boosting Regression</option>
+                  <option value="svr" {{ 'selected' if tab.selected_detail_model == 'svr' else '' }}>Support Vector Regression</option>
+                  <option value="knn" {{ 'selected' if tab.selected_detail_model == 'knn' else '' }}>kNN Regression</option>
+                </select>
+              </div>
+              {% endif %}
               <div>
                 <label for="{{ tab.target_field }}">Numeric target column</label>
                 <select id="{{ tab.target_field }}" name="{{ tab.target_field }}" required>
@@ -254,7 +283,7 @@ PAGE_TEMPLATE = """
         {% if tab.comparison_html %}
           <div class="panel">
             <h2>Model comparison</h2>
-            <p>Detailed results below show the best model by test RMSE.</p>
+            <p>Detailed results below show the selected detail model, or the best model when Auto best is chosen.</p>
             {% if tab.comparison_download %}
               <div class="download-links">
                 <a href="{{ tab.comparison_download.href }}">{{ tab.comparison_download.label }}</a>
@@ -1951,9 +1980,12 @@ def populate_tab_from_request(tab):
         if not tab["selected_models"]:
             tab["selected_models"] = [tab["default_model"]]
         tab["selected_model"] = tab["selected_models"][0]
+        selected_detail_model = request.form.get(tab.get("detail_model_field", ""), "best")
+        tab["selected_detail_model"] = selected_detail_model if selected_detail_model == "best" or selected_detail_model in allowed_models else "best"
     else:
         tab["selected_model"] = request.form.get(tab["model_field"], tab["default_model"])
         tab["selected_models"] = [tab["selected_model"]]
+        tab["selected_detail_model"] = "best"
 
     tab["selected_test_size"] = parse_test_size(request.form.get(tab["test_size_field"]))
     tab["selected_cv_folds"] = parse_cv_folds(request.form.get(tab["cv_folds_field"]))
