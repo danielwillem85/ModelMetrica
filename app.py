@@ -1,5 +1,7 @@
 from io import BytesIO, StringIO
 import base64
+from copy import deepcopy
+from datetime import datetime
 import math
 import sqlite3
 from pathlib import Path
@@ -37,6 +39,7 @@ ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx"}
 DB_PATH = Path(__file__).with_name("modelmetrica_users.sqlite3")
 DATASETS = {}
 DOWNLOADS = {}
+PRO_RUNS = {}
 
 PAGE_TEMPLATE = """
 {% macro render_classification_tab(tab, active_tab, has_data, columns) %}
@@ -118,6 +121,35 @@ PAGE_TEMPLATE = """
           {% endif %}
         </div>
 
+        {% if tab.run_history %}
+          <div class="panel">
+            <h2>Recent Pro runs</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Target</th>
+                    <th>Models</th>
+                    <th>Detail</th>
+                    <th>Summary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for run in tab.run_history %}
+                    <tr>
+                      <td>{{ run.timestamp }}</td>
+                      <td>{{ run.target }}</td>
+                      <td>{{ run.models }}</td>
+                      <td>{{ run.detail_model }}</td>
+                      <td>{{ run.summary }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {% endif %}
         {% if tab.comparison_html %}
           <div class="panel">
             <h2>Model comparison</h2>
@@ -280,6 +312,35 @@ PAGE_TEMPLATE = """
           {% endif %}
         </div>
 
+        {% if tab.run_history %}
+          <div class="panel">
+            <h2>Recent Pro runs</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Target</th>
+                    <th>Models</th>
+                    <th>Detail</th>
+                    <th>Summary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for run in tab.run_history %}
+                    <tr>
+                      <td>{{ run.timestamp }}</td>
+                      <td>{{ run.target }}</td>
+                      <td>{{ run.models }}</td>
+                      <td>{{ run.detail_model }}</td>
+                      <td>{{ run.summary }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {% endif %}
         {% if tab.comparison_html %}
           <div class="panel">
             <h2>Model comparison</h2>
@@ -1927,6 +1988,7 @@ def make_model_tab(config):
         {
             "selected_model": config["default_model"],
             "selected_models": [config["default_model"]],
+            "selected_detail_model": "best",
             "allow_model_comparison": config.get("allow_model_comparison", False),
             "selected_test_size": 0.2,
             "selected_cv_folds": 0,
@@ -1936,6 +1998,7 @@ def make_model_tab(config):
             "output": None,
             "comparison_html": None,
             "comparison_download": None,
+            "run_history": [],
         }
     )
     return tab
@@ -2375,6 +2438,116 @@ def handle_classification_comparison_submission(tab, dataset):
     table_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
     tab["comparison_html"], comparison = comparison_html(table_rows, ["Model", "Test accuracy", "CV accuracy", "Precision", "Recall", "F1", "Status"])
     tab["comparison_download"] = register_comparison_download(tab, comparison)
+
+PRO_TAB_NAMES = {"pro_classification", "pro_regression"}
+
+
+def model_label_for_run(tab, model_name):
+    if tab["form_name"] in REGRESSION_TAB_CONFIGS:
+        return REGRESSION_MODEL_LABELS.get(model_name, model_name)
+    return CLASSIFICATION_MODEL_LABELS.get(model_name, model_name)
+
+
+def output_metric_summary(tab):
+    output = tab.get("output") or {}
+    if tab["form_name"] == "pro_classification":
+        accuracy = metric_value(output, "Test accuracy")
+        cv_accuracy = metric_value(output, "CV accuracy mean")
+        parts = []
+        if accuracy is not None:
+            parts.append(f"accuracy {accuracy}")
+        if cv_accuracy is not None:
+            parts.append(f"CV {cv_accuracy}")
+        return ", ".join(parts) if parts else "Classification run"
+
+    r_squared = metric_value(output, "Test R squared")
+    rmse = metric_value(output, "Test RMSE")
+    parts = []
+    if r_squared is not None:
+        parts.append(f"R2 {r_squared}")
+    if rmse is not None:
+        parts.append(f"RMSE {rmse}")
+    return ", ".join(parts) if parts else "Regression run"
+
+
+def run_history_entry(tab):
+    detail_model = tab.get("selected_model", tab["default_model"])
+    return {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "target": tab.get("selected_target") or "-",
+        "models": ", ".join(model_label_for_run(tab, model) for model in tab.get("selected_models", [])),
+        "detail_model": model_label_for_run(tab, detail_model),
+        "summary": output_metric_summary(tab),
+    }
+
+
+def pro_runs_for_current_dataset():
+    current_id = dataset_id()
+    if not current_id:
+        return None
+    return PRO_RUNS.setdefault(current_id, {})
+
+
+def update_run_history(tab, runs):
+    tab["run_history"] = [run["history_entry"] for run in runs]
+
+
+def save_pro_run(tab):
+    if tab["form_name"] not in PRO_TAB_NAMES or tab.get("output") is None:
+        return
+
+    dataset_runs = pro_runs_for_current_dataset()
+    if dataset_runs is None:
+        return
+
+    runs = dataset_runs.setdefault(tab["form_name"], [])
+    snapshot = {
+        "selected_model": tab.get("selected_model"),
+        "selected_models": list(tab.get("selected_models", [])),
+        "selected_detail_model": tab.get("selected_detail_model", "best"),
+        "selected_test_size": tab.get("selected_test_size"),
+        "selected_cv_folds": tab.get("selected_cv_folds"),
+        "selected_target": tab.get("selected_target"),
+        "selected_predictors": list(tab.get("selected_predictors", [])),
+        "comparison_html": tab.get("comparison_html"),
+        "comparison_download": deepcopy(tab.get("comparison_download")),
+        "output": deepcopy(tab.get("output")),
+        "history_entry": run_history_entry(tab),
+    }
+    runs.insert(0, snapshot)
+    del runs[5:]
+    update_run_history(tab, runs)
+
+
+def restore_pro_run(tab, snapshot):
+    for key in [
+        "selected_model",
+        "selected_models",
+        "selected_detail_model",
+        "selected_test_size",
+        "selected_cv_folds",
+        "selected_target",
+        "selected_predictors",
+        "comparison_html",
+        "comparison_download",
+        "output",
+    ]:
+        tab[key] = deepcopy(snapshot.get(key))
+
+
+def restore_pro_runs(model_tabs, exclude=None):
+    dataset_runs = pro_runs_for_current_dataset()
+    if dataset_runs is None:
+        return
+
+    exclude = exclude or set()
+    for tab_name in PRO_TAB_NAMES:
+        runs = dataset_runs.get(tab_name, [])
+        tab = model_tabs[tab_name]
+        if tab_name not in exclude and runs:
+            restore_pro_run(tab, runs[0])
+        update_run_history(tab, runs)
+
 def handle_classification_submission(tab, dataset):
     populate_tab_from_request(tab)
 
@@ -2582,6 +2755,15 @@ def index():
             apply_classification_defaults(model_tabs[tab_name], columns)
         for tab_name in REGRESSION_TAB_CONFIGS:
             apply_regression_defaults(model_tabs[tab_name], data, columns)
+
+        current_pro_tab = form_name if request.method == "POST" and form_name in PRO_TAB_NAMES else None
+        if current_pro_tab and model_tabs[current_pro_tab].get("output") is not None:
+            save_pro_run(model_tabs[current_pro_tab])
+            restore_pro_runs(model_tabs)
+        elif current_pro_tab:
+            restore_pro_runs(model_tabs, exclude={current_pro_tab})
+        else:
+            restore_pro_runs(model_tabs)
 
     table_html = preview_table(data) if has_data else None
     row_count = min(25, len(data)) if has_data else 0
