@@ -263,6 +263,24 @@ PAGE_TEMPLATE = """
                 {{ tab.output.details_html|safe }}
               </div>
             {% endif %}
+            {% if tab.output.cv_summary_html or tab.output.cv_diagnostics_html or tab.output.cv_plot %}
+              <h3>Cross-validation diagnostics</h3>
+              {% if tab.output.cv_plot %}
+                <div class="tree-plot">
+                  <img src="data:image/png;base64,{{ tab.output.cv_plot }}" alt="Cross-validation fold score plot">
+                </div>
+              {% endif %}
+              {% if tab.output.cv_summary_html %}
+                <div class="table-wrap">
+                  {{ tab.output.cv_summary_html|safe }}
+                </div>
+              {% endif %}
+              {% if tab.output.cv_diagnostics_html %}
+                <div class="table-wrap">
+                  {{ tab.output.cv_diagnostics_html|safe }}
+                </div>
+              {% endif %}
+            {% endif %}
             <h3>Confusion matrix</h3>
             <div class="table-wrap">
               {{ tab.output.confusion_html|safe }}
@@ -514,6 +532,24 @@ PAGE_TEMPLATE = """
               <div class="table-wrap">
                 {{ tab.output.details_html|safe }}
               </div>
+            {% endif %}
+            {% if tab.output.cv_summary_html or tab.output.cv_diagnostics_html or tab.output.cv_plot %}
+              <h3>Cross-validation diagnostics</h3>
+              {% if tab.output.cv_plot %}
+                <div class="tree-plot">
+                  <img src="data:image/png;base64,{{ tab.output.cv_plot }}" alt="Cross-validation fold score plot">
+                </div>
+              {% endif %}
+              {% if tab.output.cv_summary_html %}
+                <div class="table-wrap">
+                  {{ tab.output.cv_summary_html|safe }}
+                </div>
+              {% endif %}
+              {% if tab.output.cv_diagnostics_html %}
+                <div class="table-wrap">
+                  {{ tab.output.cv_diagnostics_html|safe }}
+                </div>
+              {% endif %}
             {% endif %}
             {% if tab.output.predicted_actual_plot %}
               <h3>Predicted vs actual</h3>
@@ -3010,6 +3046,176 @@ def histogram_plot_image(values, xlabel, title):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def cv_fold_plot_image(fold_frame, metric_column, title):
+    if fold_frame is None or fold_frame.empty or metric_column not in fold_frame:
+        return None
+
+    x_values = fold_frame["Fold"].astype(int).to_numpy()
+    y_values = fold_frame[metric_column].astype(float).to_numpy()
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    ax.plot(x_values, y_values, color="#176b87", linewidth=2.1, marker="o", markersize=6)
+    ax.axhline(float(np.mean(y_values)), color="#94a3b8", linestyle="--", linewidth=1.3, label="Mean")
+    ax.set_xlabel("Fold")
+    ax.set_ylabel(metric_column)
+    ax.set_title(title)
+    ax.grid(True, color="#e2e8f0", linewidth=0.8)
+    ax.legend(loc="best")
+    buffer = BytesIO()
+    fig.tight_layout()
+    fig.savefig(buffer, format="png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def cv_summary_frame(metric_scores):
+    rows = []
+    for metric, scores in metric_scores.items():
+        values = np.asarray(scores, dtype=float)
+        rows.append(
+            {
+                "Metric": metric,
+                "Mean": f"{np.mean(values):.3f}",
+                "SD": f"{np.std(values):.3f}",
+                "Min": f"{np.min(values):.3f}",
+                "Max": f"{np.max(values):.3f}",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def classification_cv_diagnostics(data, target, predictors, model_name, folds, options=None):
+    if folds <= 1:
+        return None
+
+    _, target_values, _, x_encoded = prepare_classification_data(
+        data,
+        target,
+        predictors,
+        binary_only=(model_name == "logistic"),
+        options=options,
+    )
+    y_codes, _ = encode_target(target_values)
+    min_class_count = int(pd.Series(y_codes).value_counts().min())
+    actual_folds = min(folds, min_class_count)
+    if actual_folds < 2:
+        return None
+
+    cv = StratifiedKFold(n_splits=actual_folds, shuffle=True, random_state=preprocessing_seed(options))
+    scores = cross_val_score(classification_estimator(model_name, options), x_encoded, y_codes, cv=cv, scoring="accuracy")
+    folds_frame = pd.DataFrame(
+        {
+            "Fold": np.arange(1, len(scores) + 1),
+            "Accuracy": scores,
+        }
+    )
+    summary = cv_summary_frame({"Accuracy": scores})
+    return {
+        "folds": folds_frame,
+        "summary": summary,
+        "plot": cv_fold_plot_image(folds_frame, "Accuracy", "Cross-validation accuracy by fold"),
+        "stats": {
+            "accuracy_sd": float(np.std(scores)),
+            "accuracy_min": float(np.min(scores)),
+            "accuracy_max": float(np.max(scores)),
+        },
+    }
+
+
+def regression_cv_diagnostics(data, target, predictors, model_name, folds, options=None):
+    if folds <= 1:
+        return None
+
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    actual_folds = min(folds, len(y))
+    if actual_folds < 2:
+        return None
+
+    cv = KFold(n_splits=actual_folds, shuffle=True, random_state=preprocessing_seed(options))
+    estimator = regression_estimator(model_name, options)
+    r2_scores = cross_val_score(estimator, x_encoded, y, cv=cv, scoring="r2")
+    rmse_scores = -cross_val_score(estimator, x_encoded, y, cv=cv, scoring="neg_root_mean_squared_error")
+    folds_frame = pd.DataFrame(
+        {
+            "Fold": np.arange(1, len(rmse_scores) + 1),
+            "R squared": r2_scores,
+            "RMSE": rmse_scores,
+        }
+    )
+    summary = cv_summary_frame({"R squared": r2_scores, "RMSE": rmse_scores})
+    return {
+        "folds": folds_frame,
+        "summary": summary,
+        "plot": cv_fold_plot_image(folds_frame, "RMSE", "Cross-validation RMSE by fold"),
+        "stats": {
+            "r2_sd": float(np.std(r2_scores)),
+            "r2_min": float(np.min(r2_scores)),
+            "r2_max": float(np.max(r2_scores)),
+            "rmse_sd": float(np.std(rmse_scores)),
+            "rmse_min": float(np.min(rmse_scores)),
+            "rmse_max": float(np.max(rmse_scores)),
+        },
+    }
+
+
+def add_cv_diagnostics(output, tab, data, model_name, options=None):
+    try:
+        if tab["form_name"] == "pro_classification":
+            diagnostics = classification_cv_diagnostics(
+                data,
+                tab["selected_target"],
+                tab["selected_predictors"],
+                model_name,
+                tab["selected_cv_folds"],
+                options,
+            )
+        else:
+            diagnostics = regression_cv_diagnostics(
+                data,
+                tab["selected_target"],
+                tab["selected_predictors"],
+                model_name,
+                tab["selected_cv_folds"],
+                options,
+            )
+    except Exception:
+        diagnostics = None
+
+    if not diagnostics:
+        output["cv_summary_html"] = None
+        output["cv_diagnostics_html"] = None
+        output["cv_plot"] = None
+        return output
+
+    summary = diagnostics["summary"]
+    folds_frame = diagnostics["folds"]
+    output["cv_summary_html"] = summary.to_html(index=False, border=0, classes="cv-summary", float_format="{:.3f}".format)
+    output["cv_diagnostics_html"] = folds_frame.to_html(index=False, border=0, classes="cv-diagnostics", float_format="{:.3f}".format)
+    output["cv_plot"] = diagnostics["plot"]
+    output.setdefault("download_data", {})["cv_summary"] = summary.to_csv(index=False)
+    output.setdefault("download_data", {})["cv_diagnostics"] = folds_frame.to_csv(index=False)
+
+    stats = diagnostics["stats"]
+    if tab["form_name"] == "pro_classification":
+        output.setdefault("metrics", []).extend(
+            [
+                {"label": "CV accuracy min", "value": f"{stats['accuracy_min']:.3f}"},
+                {"label": "CV accuracy max", "value": f"{stats['accuracy_max']:.3f}"},
+            ]
+        )
+    else:
+        output.setdefault("metrics", []).extend(
+            [
+                {"label": "CV R squared SD", "value": f"{stats['r2_sd']:.3f}"},
+                {"label": "CV R squared min", "value": f"{stats['r2_min']:.3f}"},
+                {"label": "CV R squared max", "value": f"{stats['r2_max']:.3f}"},
+                {"label": "CV RMSE SD", "value": f"{stats['rmse_sd']:.3f}"},
+                {"label": "CV RMSE min", "value": f"{stats['rmse_min']:.3f}"},
+                {"label": "CV RMSE max", "value": f"{stats['rmse_max']:.3f}"},
+            ]
+        )
+    return output
+
+
 def add_regression_analytics(output, data, target, predictors, model_name, test_size, options=None):
     try:
         y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
@@ -3198,6 +3404,15 @@ def handle_classification_comparison_submission(tab, dataset):
             )
             accuracy = metric_float(output, "Test accuracy")
             cv_accuracy = metric_float(output, "CV accuracy mean")
+            cv_diagnostics = classification_cv_diagnostics(
+                dataset["data"],
+                tab["selected_target"],
+                tab["selected_predictors"],
+                model_name,
+                tab["selected_cv_folds"],
+                options,
+            )
+            cv_stats = cv_diagnostics["stats"] if cv_diagnostics else {}
             precision, recall, f1 = weighted_precision_recall_f1(output)
             tuned = tune_classification_model(
                 model_name,
@@ -3220,6 +3435,9 @@ def handle_classification_comparison_submission(tab, dataset):
                     "Model": model_label,
                     "Default accuracy": format_optional_metric(accuracy),
                     "Default CV accuracy": format_optional_metric(cv_accuracy),
+                    "CV accuracy SD": format_optional_metric(cv_stats.get("accuracy_sd")),
+                    "CV accuracy min": format_optional_metric(cv_stats.get("accuracy_min")),
+                    "CV accuracy max": format_optional_metric(cv_stats.get("accuracy_max")),
                     "Tuned accuracy": format_optional_metric(tuned_accuracy),
                     "Tuned CV accuracy": format_optional_metric(tuned_cv_accuracy),
                     "Precision": format_optional_metric(precision),
@@ -3238,6 +3456,9 @@ def handle_classification_comparison_submission(tab, dataset):
                     "Model": model_label,
                     "Default accuracy": "-",
                     "Default CV accuracy": "-",
+                    "CV accuracy SD": "-",
+                    "CV accuracy min": "-",
+                    "CV accuracy max": "-",
                     "Tuned accuracy": "-",
                     "Tuned CV accuracy": "-",
                     "Precision": "-",
@@ -3279,6 +3500,7 @@ def handle_classification_comparison_submission(tab, dataset):
             tab["selected_test_size"],
             detail_options,
         )
+        detail_output = add_cv_diagnostics(detail_output, tab, dataset["data"], detail_model_name, detail_options)
         tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
             row["_is_best"] = row["_model_name"] == best_model_name
@@ -3294,7 +3516,7 @@ def handle_classification_comparison_submission(tab, dataset):
         tab["error"] = "No selected model could be fit."
         tab["detail_metric_comparison_html"] = None
 
-    tab["comparison_html"], comparison = comparison_html(rows, ["Model", "Default accuracy", "Default CV accuracy", "Tuned accuracy", "Tuned CV accuracy", "Precision", "Recall", "F1", "Best params", "Status"])
+    tab["comparison_html"], comparison = comparison_html(rows, ["Model", "Default accuracy", "Default CV accuracy", "CV accuracy SD", "CV accuracy min", "CV accuracy max", "Tuned accuracy", "Tuned CV accuracy", "Precision", "Recall", "F1", "Best params", "Status"])
     tab["comparison_download"] = register_comparison_download(tab, comparison)
 
 PRO_TAB_NAMES = {"pro_classification", "pro_regression"}
@@ -3568,6 +3790,15 @@ def handle_regression_comparison_submission(tab, dataset):
             mae = metric_float(output, "Test MAE")
             cv_r_squared = metric_float(output, "CV R squared mean")
             cv_rmse = metric_float(output, "CV RMSE mean")
+            cv_diagnostics = regression_cv_diagnostics(
+                dataset["data"],
+                tab["selected_target"],
+                tab["selected_predictors"],
+                model_name,
+                tab["selected_cv_folds"],
+                options,
+            )
+            cv_stats = cv_diagnostics["stats"] if cv_diagnostics else {}
             tuned = tune_regression_model(
                 model_name,
                 dataset["data"],
@@ -3590,6 +3821,9 @@ def handle_regression_comparison_submission(tab, dataset):
                     "Test R squared": format_optional_metric(r_squared),
                     "Default RMSE": format_optional_metric(rmse),
                     "Default CV RMSE": format_optional_metric(cv_rmse),
+                    "CV RMSE SD": format_optional_metric(cv_stats.get("rmse_sd")),
+                    "CV RMSE min": format_optional_metric(cv_stats.get("rmse_min")),
+                    "CV RMSE max": format_optional_metric(cv_stats.get("rmse_max")),
                     "Tuned RMSE": format_optional_metric(tuned_rmse),
                     "Tuned CV RMSE": format_optional_metric(tuned_cv_rmse),
                     "Test MAE": format_optional_metric(mae),
@@ -3608,6 +3842,9 @@ def handle_regression_comparison_submission(tab, dataset):
                     "Test R squared": "-",
                     "Default RMSE": "-",
                     "Default CV RMSE": "-",
+                    "CV RMSE SD": "-",
+                    "CV RMSE min": "-",
+                    "CV RMSE max": "-",
                     "Tuned RMSE": "-",
                     "Tuned CV RMSE": "-",
                     "Test MAE": "-",
@@ -3647,6 +3884,7 @@ def handle_regression_comparison_submission(tab, dataset):
             tab["selected_test_size"],
             detail_options,
         )
+        detail_output = add_cv_diagnostics(detail_output, tab, dataset["data"], detail_model_name, detail_options)
         tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
             row["_is_best"] = row["_model_name"] == best_model_name
@@ -3664,7 +3902,7 @@ def handle_regression_comparison_submission(tab, dataset):
 
     tab["comparison_html"], comparison = comparison_html(
         rows,
-        ["Model", "Test R squared", "Default RMSE", "Default CV RMSE", "Tuned RMSE", "Tuned CV RMSE", "Test MAE", "CV R squared", "Best params", "Status"],
+        ["Model", "Test R squared", "Default RMSE", "Default CV RMSE", "CV RMSE SD", "CV RMSE min", "CV RMSE max", "Tuned RMSE", "Tuned CV RMSE", "Test MAE", "CV R squared", "Best params", "Status"],
     )
     tab["comparison_download"] = register_comparison_download(tab, comparison)
 
@@ -3911,6 +4149,16 @@ def pro_report_html(tab_name, snapshot, dataset):
     metric_table = metrics_report_table(output.get("metrics") or [])
     if metric_table:
         sections.extend(["<h3>Metrics</h3>", metric_table])
+    cv_summary_table = csv_report_table(artifacts.get("cv_summary"))
+    cv_diagnostics_table = csv_report_table(artifacts.get("cv_diagnostics"))
+    if cv_summary_table or cv_diagnostics_table or output.get("cv_plot"):
+        sections.extend(["<h3>Cross-validation diagnostics</h3>"])
+        if output.get("cv_plot"):
+            sections.append(report_image("Cross-validation fold scores", output.get("cv_plot"), "Cross-validation fold score plot"))
+        if cv_summary_table:
+            sections.extend(["<h4>Summary</h4>", cv_summary_table])
+        if cv_diagnostics_table:
+            sections.extend(["<h4>Fold scores</h4>", cv_diagnostics_table])
     for heading, key in [
         ("Coefficients", "coefficients_html"),
         ("Variable importance", "importances_html"),
@@ -4070,6 +4318,9 @@ def pro_report_pdf_bytes(tab_name, snapshot, dataset):
         add_pdf_table_pages(pdf, "Dataset Metadata", pd.DataFrame(report_metadata_rows(tab_name, snapshot, dataset)), rows_per_page=22)
         add_pdf_table_pages(pdf, "Model Comparison", csv_report_frame(artifacts.get("model_comparison")), rows_per_page=18)
         add_pdf_table_pages(pdf, "Selected Detail Metrics", output_metrics_frame(output), rows_per_page=24)
+        add_pdf_image_page(pdf, "Cross-Validation Fold Scores", output.get("cv_plot"))
+        add_pdf_table_pages(pdf, "Cross-Validation Summary", csv_report_frame(artifacts.get("cv_summary")), rows_per_page=24)
+        add_pdf_table_pages(pdf, "Cross-Validation Fold Scores", csv_report_frame(artifacts.get("cv_diagnostics")), rows_per_page=24)
 
         details_frame_pdf = csv_report_frame(artifacts.get("details"))
         if details_frame_pdf is None:
