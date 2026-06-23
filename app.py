@@ -2,6 +2,7 @@ from io import BytesIO, StringIO
 import base64
 from copy import deepcopy
 from datetime import datetime
+import html
 import json
 import math
 import sqlite3
@@ -111,6 +112,43 @@ PAGE_TEMPLATE = """
                   <option value="10" {{ 'selected' if tab.selected_cv_folds == 10 else '' }}>10 folds</option>
                 </select>
               </div>
+              {% if tab.allow_model_comparison %}
+              <div>
+                <label for="{{ tab.missing_values_field }}">Missing values</label>
+                <select id="{{ tab.missing_values_field }}" name="{{ tab.missing_values_field }}" required>
+                  <option value="drop" {{ 'selected' if tab.selected_missing_values == 'drop' else '' }}>Drop incomplete rows</option>
+                  <option value="impute_mean_mode" {{ 'selected' if tab.selected_missing_values == 'impute_mean_mode' else '' }}>Impute mean/mode</option>
+                  <option value="impute_median_mode" {{ 'selected' if tab.selected_missing_values == 'impute_median_mode' else '' }}>Impute median/mode</option>
+                </select>
+              </div>
+              <div>
+                <label for="{{ tab.categorical_encoding_field }}">Categorical encoding</label>
+                <select id="{{ tab.categorical_encoding_field }}" name="{{ tab.categorical_encoding_field }}" required>
+                  <option value="one_hot_drop_first" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_drop_first' else '' }}>One-hot, drop first</option>
+                  <option value="one_hot_full" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_full' else '' }}>One-hot, all levels</option>
+                  <option value="ordinal" {{ 'selected' if tab.selected_categorical_encoding == 'ordinal' else '' }}>Ordinal codes</option>
+                </select>
+              </div>
+              <div>
+                <label for="{{ tab.scaling_field }}">Feature scaling</label>
+                <select id="{{ tab.scaling_field }}" name="{{ tab.scaling_field }}" required>
+                  <option value="on" {{ 'selected' if tab.selected_scaling == 'on' else '' }}>On</option>
+                  <option value="off" {{ 'selected' if tab.selected_scaling == 'off' else '' }}>Off</option>
+                </select>
+              </div>
+              <div>
+                <label for="{{ tab.split_seed_field }}">Split seed</label>
+                <input id="{{ tab.split_seed_field }}" name="{{ tab.split_seed_field }}" type="number" min="0" max="999999" step="1" value="{{ tab.selected_split_seed }}" required>
+              </div>
+              <div>
+                <label for="{{ tab.outlier_handling_field }}">Outliers</label>
+                <select id="{{ tab.outlier_handling_field }}" name="{{ tab.outlier_handling_field }}" required>
+                  <option value="none" {{ 'selected' if tab.selected_outlier_handling == 'none' else '' }}>No handling</option>
+                  <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
+                  <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
+                </select>
+              </div>
+              {% endif %}
               <div>
                 <button type="submit">Run</button>
               </div>
@@ -168,8 +206,11 @@ PAGE_TEMPLATE = """
           <div class="panel">
             <h2>{{ tab.output.title }}</h2>
             <p>{{ tab.output.description }}</p>
-            {% if tab.output.downloads %}
+            {% if tab.output.downloads or tab.report_download %}
               <div class="download-links">
+                {% if tab.report_download %}
+                  <a href="{{ tab.report_download.href }}">{{ tab.report_download.label }}</a>
+                {% endif %}
                 {% for download in tab.output.downloads %}
                   <a href="{{ download.href }}">{{ download.label }}</a>
                 {% endfor %}
@@ -302,6 +343,43 @@ PAGE_TEMPLATE = """
                   <option value="10" {{ 'selected' if tab.selected_cv_folds == 10 else '' }}>10 folds</option>
                 </select>
               </div>
+              {% if tab.allow_model_comparison %}
+              <div>
+                <label for="{{ tab.missing_values_field }}">Missing values</label>
+                <select id="{{ tab.missing_values_field }}" name="{{ tab.missing_values_field }}" required>
+                  <option value="drop" {{ 'selected' if tab.selected_missing_values == 'drop' else '' }}>Drop incomplete rows</option>
+                  <option value="impute_mean_mode" {{ 'selected' if tab.selected_missing_values == 'impute_mean_mode' else '' }}>Impute mean/mode</option>
+                  <option value="impute_median_mode" {{ 'selected' if tab.selected_missing_values == 'impute_median_mode' else '' }}>Impute median/mode</option>
+                </select>
+              </div>
+              <div>
+                <label for="{{ tab.categorical_encoding_field }}">Categorical encoding</label>
+                <select id="{{ tab.categorical_encoding_field }}" name="{{ tab.categorical_encoding_field }}" required>
+                  <option value="one_hot_drop_first" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_drop_first' else '' }}>One-hot, drop first</option>
+                  <option value="one_hot_full" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_full' else '' }}>One-hot, all levels</option>
+                  <option value="ordinal" {{ 'selected' if tab.selected_categorical_encoding == 'ordinal' else '' }}>Ordinal codes</option>
+                </select>
+              </div>
+              <div>
+                <label for="{{ tab.scaling_field }}">Feature scaling</label>
+                <select id="{{ tab.scaling_field }}" name="{{ tab.scaling_field }}" required>
+                  <option value="on" {{ 'selected' if tab.selected_scaling == 'on' else '' }}>On</option>
+                  <option value="off" {{ 'selected' if tab.selected_scaling == 'off' else '' }}>Off</option>
+                </select>
+              </div>
+              <div>
+                <label for="{{ tab.split_seed_field }}">Split seed</label>
+                <input id="{{ tab.split_seed_field }}" name="{{ tab.split_seed_field }}" type="number" min="0" max="999999" step="1" value="{{ tab.selected_split_seed }}" required>
+              </div>
+              <div>
+                <label for="{{ tab.outlier_handling_field }}">Outliers</label>
+                <select id="{{ tab.outlier_handling_field }}" name="{{ tab.outlier_handling_field }}" required>
+                  <option value="none" {{ 'selected' if tab.selected_outlier_handling == 'none' else '' }}>No handling</option>
+                  <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
+                  <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
+                </select>
+              </div>
+              {% endif %}
               <div>
                 <button type="submit">Run</button>
               </div>
@@ -359,8 +437,11 @@ PAGE_TEMPLATE = """
           <div class="panel">
             <h2>{{ tab.output.title }}</h2>
             <p>{{ tab.output.description }}</p>
-            {% if tab.output.downloads %}
+            {% if tab.output.downloads or tab.report_download %}
               <div class="download-links">
+                {% if tab.report_download %}
+                  <a href="{{ tab.report_download.href }}">{{ tab.report_download.label }}</a>
+                {% endif %}
                 {% for download in tab.output.downloads %}
                   <a href="{{ download.href }}">{{ download.label }}</a>
                 {% endfor %}
@@ -1005,14 +1086,158 @@ def normal_two_sided_pvalue(z_value):
     return float(math.erfc(abs(z_value) / math.sqrt(2)))
 
 
-def prepare_classification_data(data, target, predictors, binary_only):
+def preprocessing_options(tab):
+    return {
+        "missing_values": tab.get("selected_missing_values", "drop"),
+        "categorical_encoding": tab.get("selected_categorical_encoding", "one_hot_drop_first"),
+        "scaling": tab.get("selected_scaling", "on"),
+        "split_seed": tab.get("selected_split_seed", 42),
+        "outlier_handling": tab.get("selected_outlier_handling", "none"),
+    }
+
+
+def preprocessing_seed(options):
+    options = options or {}
+    return int(options.get("split_seed", options.get("selected_split_seed", 42)))
+
+
+def scaling_enabled(options):
+    options = options or {}
+    return options.get("scaling", options.get("selected_scaling", "on")) == "on"
+
+
+def categorical_encoding_mode(options):
+    options = options or {}
+    return options.get("categorical_encoding", options.get("selected_categorical_encoding", "one_hot_drop_first"))
+
+
+def missing_value_mode(options):
+    options = options or {}
+    return options.get("missing_values", options.get("selected_missing_values", "drop"))
+
+
+def outlier_mode(options):
+    options = options or {}
+    return options.get("outlier_handling", options.get("selected_outlier_handling", "none"))
+
+
+def preprocessing_details(options):
+    return {
+        "Missing values": {
+            "drop": "Drop incomplete rows",
+            "impute_mean_mode": "Impute mean/mode",
+            "impute_median_mode": "Impute median/mode",
+        }.get(missing_value_mode(options), "Drop incomplete rows"),
+        "Categorical encoding": {
+            "one_hot_drop_first": "One-hot, drop first",
+            "one_hot_full": "One-hot, all levels",
+            "ordinal": "Ordinal codes",
+        }.get(categorical_encoding_mode(options), "One-hot, drop first"),
+        "Feature scaling": "On" if scaling_enabled(options) else "Off",
+        "Outlier handling": {
+            "none": "None",
+            "winsorize": "Winsorize numeric columns",
+            "remove_iqr": "Remove IQR outliers",
+        }.get(outlier_mode(options), "None"),
+        "Random seed": preprocessing_seed(options),
+    }
+
+
+def fill_missing_predictors(model_data, predictors, options):
+    if missing_value_mode(options) == "drop":
+        return model_data.dropna()
+
+    model_data = model_data.copy()
+    for column in predictors:
+        if pd.api.types.is_numeric_dtype(model_data[column]):
+            if missing_value_mode(options) == "impute_median_mode":
+                fill_value = model_data[column].median()
+            else:
+                fill_value = model_data[column].mean()
+            if pd.isna(fill_value):
+                fill_value = 0
+        else:
+            modes = model_data[column].mode(dropna=True)
+            fill_value = modes.iloc[0] if not modes.empty else "Missing"
+        model_data[column] = model_data[column].fillna(fill_value)
+    return model_data
+
+
+def apply_outlier_handling(model_data, target, predictors, task, options):
+    mode = outlier_mode(options)
+    if mode == "none":
+        return model_data
+
+    model_data = model_data.copy()
+    numeric_columns = [column for column in predictors if pd.api.types.is_numeric_dtype(model_data[column])]
+    if task == "regression" and pd.api.types.is_numeric_dtype(model_data[target]):
+        numeric_columns.append(target)
+    numeric_columns = list(dict.fromkeys(numeric_columns))
+    if not numeric_columns:
+        return model_data
+
+    if mode == "winsorize":
+        for column in numeric_columns:
+            lower = model_data[column].quantile(0.01)
+            upper = model_data[column].quantile(0.99)
+            if pd.notna(lower) and pd.notna(upper) and lower < upper:
+                model_data[column] = model_data[column].clip(lower, upper)
+        return model_data
+
+    if mode == "remove_iqr":
+        keep = pd.Series(True, index=model_data.index)
+        for column in numeric_columns:
+            q1 = model_data[column].quantile(0.25)
+            q3 = model_data[column].quantile(0.75)
+            iqr = q3 - q1
+            if pd.notna(iqr) and iqr > 0:
+                keep &= model_data[column].between(q1 - 1.5 * iqr, q3 + 1.5 * iqr)
+        return model_data.loc[keep]
+
+    return model_data
+
+
+def encode_predictors(model_data, predictors, options):
+    x_raw = model_data[predictors]
+    if categorical_encoding_mode(options) == "ordinal":
+        encoded = pd.DataFrame(index=x_raw.index)
+        for column in predictors:
+            if pd.api.types.is_numeric_dtype(x_raw[column]):
+                encoded[column] = pd.to_numeric(x_raw[column], errors="coerce")
+            else:
+                encoded[column] = pd.Categorical(x_raw[column]).codes.astype(float)
+        return encoded.astype(float)
+
+    drop_first = categorical_encoding_mode(options) == "one_hot_drop_first"
+    return pd.get_dummies(x_raw, drop_first=drop_first, dtype=float)
+
+
+def scaled_frames(split, options):
+    if not scaling_enabled(options):
+        return split["x_train"], split["x_test"], "Off"
+    scaler = StandardScaler()
+    scaled_train = scaler.fit_transform(split["x_train"])
+    scaled_test = scaler.transform(split["x_test"])
+    return scaled_train, scaled_test, "StandardScaler"
+
+
+def add_preprocessing_details(details, options):
+    if options is None:
+        return details
+    details.update(preprocessing_details(options))
+    return details
+
+def prepare_classification_data(data, target, predictors, binary_only, options=None):
     if target in predictors:
         raise ValueError("The target column cannot also be used as a predictor.")
 
     selected = [target] + predictors
-    model_data = data[selected].dropna()
+    model_data = data[selected].copy()
+    model_data = model_data.loc[model_data[target].notna()].copy()
+    model_data = fill_missing_predictors(model_data, predictors, options)
+    model_data = apply_outlier_handling(model_data, target, predictors, "classification", options)
     if len(model_data) < 5:
-        raise ValueError("At least five complete rows are required.")
+        raise ValueError("At least five usable rows are required after preprocessing.")
 
     target_values = model_data[target]
     classes = list(pd.unique(target_values))
@@ -1021,10 +1246,11 @@ def prepare_classification_data(data, target, predictors, binary_only):
     if len(classes) < 2:
         raise ValueError("Classification requires a target column with at least two classes.")
 
-    x_raw = model_data[predictors]
-    x_encoded = pd.get_dummies(x_raw, drop_first=True, dtype=float)
+    x_encoded = encode_predictors(model_data, predictors, options)
     if x_encoded.empty:
         raise ValueError("At least one usable predictor is required.")
+    if x_encoded.isna().any().any():
+        raise ValueError("Preprocessing left missing predictor values. Choose imputation or drop incomplete rows.")
 
     return model_data, target_values, classes, x_encoded
 
@@ -1044,6 +1270,17 @@ def parse_cv_folds(value):
         return 0
     return folds if folds in {3, 5, 10} else 0
 
+
+def parse_choice(value, allowed, default):
+    return value if value in allowed else default
+
+
+def parse_split_seed(value):
+    try:
+        seed = int(value)
+    except (TypeError, ValueError):
+        return 42
+    return min(max(seed, 0), 999999)
 
 def dataset_id():
     return session.get("dataset_id")
@@ -1080,41 +1317,41 @@ def register_downloads(result_type, result):
     return result
 
 
-def classification_estimator(model_name):
+def classification_estimator(model_name, options=None):
     if model_name == "logistic":
-        return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=42))
+        return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=preprocessing_seed(options))) if scaling_enabled(options) else LogisticRegression(max_iter=1000, random_state=preprocessing_seed(options))
     if model_name == "tree":
-        return DecisionTreeClassifier(max_depth=4, random_state=42)
+        return DecisionTreeClassifier(max_depth=4, random_state=preprocessing_seed(options))
     if model_name == "random_forest":
-        return RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+        return RandomForestClassifier(n_estimators=200, random_state=preprocessing_seed(options), n_jobs=-1)
     if model_name == "gradient_boosting":
-        return GradientBoostingClassifier(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
+        return GradientBoostingClassifier(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=preprocessing_seed(options))
     if model_name == "svm":
-        return make_pipeline(StandardScaler(), SVC(kernel="rbf", C=1.0, gamma="scale", probability=True, random_state=42))
+        return make_pipeline(StandardScaler(), SVC(kernel="rbf", C=1.0, gamma="scale", probability=True, random_state=preprocessing_seed(options))) if scaling_enabled(options) else SVC(kernel="rbf", C=1.0, gamma="scale", probability=True, random_state=preprocessing_seed(options))
     if model_name == "knn":
-        return make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=5, weights="distance"))
+        return make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=5, weights="distance")) if scaling_enabled(options) else KNeighborsClassifier(n_neighbors=5, weights="distance")
     raise ValueError("Unknown classification model.")
 
 
-def regression_estimator(model_name):
+def regression_estimator(model_name, options=None):
     if model_name == "linear":
         return LinearRegression()
     if model_name == "ridge":
-        return make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+        return make_pipeline(StandardScaler(), Ridge(alpha=1.0)) if scaling_enabled(options) else Ridge(alpha=1.0)
     if model_name == "lasso":
-        return make_pipeline(StandardScaler(), Lasso(alpha=0.1, max_iter=10000, random_state=42))
+        return make_pipeline(StandardScaler(), Lasso(alpha=0.1, max_iter=10000, random_state=preprocessing_seed(options))) if scaling_enabled(options) else Lasso(alpha=0.1, max_iter=10000, random_state=preprocessing_seed(options))
     if model_name == "random_forest":
-        return RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
+        return RandomForestRegressor(n_estimators=200, random_state=preprocessing_seed(options), n_jobs=-1)
     if model_name == "gradient_boosting":
-        return GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
+        return GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=preprocessing_seed(options))
     if model_name == "svr":
-        return make_pipeline(StandardScaler(), SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale"))
+        return make_pipeline(StandardScaler(), SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale")) if scaling_enabled(options) else SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale")
     if model_name == "knn":
-        return make_pipeline(StandardScaler(), KNeighborsRegressor(n_neighbors=5, weights="distance"))
+        return make_pipeline(StandardScaler(), KNeighborsRegressor(n_neighbors=5, weights="distance")) if scaling_enabled(options) else KNeighborsRegressor(n_neighbors=5, weights="distance")
     raise ValueError("Unknown regression model.")
 
 
-def append_classification_cv(metrics, model_name, x_encoded, target_values, folds):
+def append_classification_cv(metrics, model_name, x_encoded, target_values, folds, options=None):
     if folds <= 1:
         return metrics
 
@@ -1125,8 +1362,8 @@ def append_classification_cv(metrics, model_name, x_encoded, target_values, fold
         metrics.append({"label": "CV accuracy", "value": "Not enough class balance"})
         return metrics
 
-    cv = StratifiedKFold(n_splits=actual_folds, shuffle=True, random_state=42)
-    scores = cross_val_score(classification_estimator(model_name), x_encoded, y_codes, cv=cv, scoring="accuracy")
+    cv = StratifiedKFold(n_splits=actual_folds, shuffle=True, random_state=preprocessing_seed(options))
+    scores = cross_val_score(classification_estimator(model_name, options), x_encoded, y_codes, cv=cv, scoring="accuracy")
     metrics.extend([
         {"label": "CV folds", "value": actual_folds},
         {"label": "CV accuracy mean", "value": f"{scores.mean():.3f}"},
@@ -1135,7 +1372,7 @@ def append_classification_cv(metrics, model_name, x_encoded, target_values, fold
     return metrics
 
 
-def append_regression_cv(metrics, model_name, x_encoded, y, folds):
+def append_regression_cv(metrics, model_name, x_encoded, y, folds, options=None):
     if folds <= 1:
         return metrics
 
@@ -1144,8 +1381,8 @@ def append_regression_cv(metrics, model_name, x_encoded, y, folds):
         metrics.append({"label": "CV R squared", "value": "Not enough rows"})
         return metrics
 
-    cv = KFold(n_splits=actual_folds, shuffle=True, random_state=42)
-    estimator = regression_estimator(model_name)
+    cv = KFold(n_splits=actual_folds, shuffle=True, random_state=preprocessing_seed(options))
+    estimator = regression_estimator(model_name, options)
     r2_scores = cross_val_score(estimator, x_encoded, y, cv=cv, scoring="r2")
     rmse_scores = -cross_val_score(estimator, x_encoded, y, cv=cv, scoring="neg_root_mean_squared_error")
     metrics.extend([
@@ -1161,7 +1398,7 @@ def encode_target(target_values):
     return encoded_target.codes, encoded_target.categories
 
 
-def split_classification_data(target_values, x_encoded, test_size):
+def split_classification_data(target_values, x_encoded, test_size, options=None):
     y_codes, class_names = encode_target(target_values)
     indices = np.arange(len(y_codes))
     class_counts = pd.Series(y_codes).value_counts()
@@ -1171,11 +1408,11 @@ def split_classification_data(target_values, x_encoded, test_size):
         train_idx, test_idx = train_test_split(
             indices,
             test_size=test_size,
-            random_state=42,
+            random_state=preprocessing_seed(options),
             stratify=stratify,
         )
     except ValueError:
-        train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=42)
+        train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=preprocessing_seed(options))
 
     if len(np.unique(y_codes[train_idx])) < 2:
         raise ValueError("The training split must contain at least two target classes.")
@@ -1240,9 +1477,9 @@ def tree_plot_image(tree, feature_names, class_names):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def fit_logistic_regression(data, target, predictors, test_size, cv_folds):
-    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True)
-    split = split_classification_data(target_values, x_encoded, test_size)
+def fit_logistic_regression(data, target, predictors, test_size, cv_folds, options=None):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
     y = (split["target_train"] == classes[1]).astype(float).to_numpy()
     x_matrix = np.column_stack([np.ones(len(split["x_train"])), split["x_train"].to_numpy(dtype=float)])
     feature_names = ["Intercept"] + list(x_encoded.columns)
@@ -1303,13 +1540,13 @@ def fit_logistic_regression(data, target, predictors, test_size, cv_folds):
         {"label": "Train McFadden R2", "value": f"{pseudo_r2:.3f}"},
         {"label": "Train log likelihood", "value": f"{log_likelihood:.3f}"},
     ]
-    metrics = append_classification_cv(metrics, "logistic", x_encoded, target_values, cv_folds)
+    metrics = append_classification_cv(metrics, "logistic", x_encoded, target_values, cv_folds, options)
     details = {
         "Model": "Logistic regression",
         "Decision threshold": "0.5",
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
 
     return {
@@ -1320,27 +1557,27 @@ def fit_logistic_regression(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
         "download_data": {
             "coefficients": coefficients.to_csv(index=False),
             "confusion_matrix": confusion.to_csv(),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_tree_model(data, target, predictors, test_size, cv_folds):
-    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    split = split_classification_data(target_values, x_encoded, test_size)
+def fit_tree_model(data, target, predictors, test_size, cv_folds, options=None):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
     min_samples_leaf = max(1, int(len(split["y_train"]) * 0.02))
 
     tree = DecisionTreeClassifier(
         max_depth=4,
         min_samples_leaf=min_samples_leaf,
-        random_state=42,
+        random_state=preprocessing_seed(options),
     )
     tree.fit(split["x_train"], split["y_train"])
     predicted_codes = tree.predict(split["x_test"])
@@ -1357,14 +1594,14 @@ def fit_tree_model(data, target, predictors, test_size, cv_folds):
         {"label": "Tree depth", "value": tree.get_depth()},
         {"label": "Terminal nodes", "value": tree.get_n_leaves()},
     ]
-    metrics = append_classification_cv(metrics, "tree", x_encoded, target_values, cv_folds)
+    metrics = append_classification_cv(metrics, "tree", x_encoded, target_values, cv_folds, options)
     details = {
         "Model": "Decision tree classifier",
         "Max depth": tree.max_depth,
         "Minimum samples per leaf": min_samples_leaf,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
     importances_html = importance_table(x_encoded.columns, tree.feature_importances_)
     importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": tree.feature_importances_})
@@ -1377,26 +1614,26 @@ def fit_tree_model(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": None,
         "importances_html": importances_html,
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": tree_plot,
         "download_data": {
             "variable_importance": importances.to_csv(index=False),
             "confusion_matrix": confusion.to_csv(),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_random_forest_model(data, target, predictors, test_size, cv_folds):
-    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    split = split_classification_data(target_values, x_encoded, test_size)
+def fit_random_forest_model(data, target, predictors, test_size, cv_folds, options=None):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
     min_samples_leaf = max(1, int(len(split["y_train"]) * 0.01))
     model = RandomForestClassifier(
         n_estimators=200,
         min_samples_leaf=min_samples_leaf,
-        random_state=42,
+        random_state=preprocessing_seed(options),
         n_jobs=-1,
     )
     model.fit(split["x_train"], split["y_train"])
@@ -1411,14 +1648,14 @@ def fit_random_forest_model(data, target, predictors, test_size, cv_folds):
         {"label": "Trees", "value": model.n_estimators},
         {"label": "Classes", "value": len(class_names)},
     ]
-    metrics = append_classification_cv(metrics, "random_forest", x_encoded, target_values, cv_folds)
+    metrics = append_classification_cv(metrics, "random_forest", x_encoded, target_values, cv_folds, options)
     details = {
         "Model": "RandomForestClassifier",
         "Trees": model.n_estimators,
         "Minimum samples per leaf": min_samples_leaf,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
     importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
 
@@ -1430,26 +1667,26 @@ def fit_random_forest_model(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
         "download_data": {
             "variable_importance": importances.to_csv(index=False),
             "confusion_matrix": confusion.to_csv(),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_gradient_boosting_model(data, target, predictors, test_size, cv_folds):
-    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    split = split_classification_data(target_values, x_encoded, test_size)
+def fit_gradient_boosting_model(data, target, predictors, test_size, cv_folds, options=None):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
     model = GradientBoostingClassifier(
         n_estimators=100,
         learning_rate=0.1,
         max_depth=3,
-        random_state=42,
+        random_state=preprocessing_seed(options),
     )
     model.fit(split["x_train"], split["y_train"])
     predicted_labels = class_names[model.predict(split["x_test"])]
@@ -1463,7 +1700,7 @@ def fit_gradient_boosting_model(data, target, predictors, test_size, cv_folds):
         {"label": "Boosting stages", "value": model.n_estimators},
         {"label": "Learning rate", "value": model.learning_rate},
     ]
-    metrics = append_classification_cv(metrics, "gradient_boosting", x_encoded, target_values, cv_folds)
+    metrics = append_classification_cv(metrics, "gradient_boosting", x_encoded, target_values, cv_folds, options)
     details = {
         "Model": "GradientBoostingClassifier",
         "Boosting stages": model.n_estimators,
@@ -1471,7 +1708,7 @@ def fit_gradient_boosting_model(data, target, predictors, test_size, cv_folds):
         "Maximum tree depth": model.max_depth,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
     importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
 
@@ -1483,25 +1720,23 @@ def fit_gradient_boosting_model(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
         "download_data": {
             "variable_importance": importances.to_csv(index=False),
             "confusion_matrix": confusion.to_csv(),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_svm_model(data, target, predictors, test_size, cv_folds):
-    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    split = split_classification_data(target_values, x_encoded, test_size)
+def fit_svm_model(data, target, predictors, test_size, cv_folds, options=None):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
-    scaler = StandardScaler()
-    scaled_train = scaler.fit_transform(split["x_train"])
-    scaled_test = scaler.transform(split["x_test"])
-    model = SVC(kernel="rbf", C=1.0, gamma="scale", random_state=42)
+    scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
+    model = SVC(kernel="rbf", C=1.0, gamma="scale", random_state=preprocessing_seed(options))
     model.fit(scaled_train, split["y_train"])
     predicted_labels = class_names[model.predict(scaled_test)]
     accuracy = accuracy_score(split["target_test"], predicted_labels)
@@ -1514,7 +1749,7 @@ def fit_svm_model(data, target, predictors, test_size, cv_folds):
         {"label": "Kernel", "value": model.kernel},
         {"label": "Support vectors", "value": int(np.sum(model.n_support_))},
     ]
-    metrics = append_classification_cv(metrics, "svm", x_encoded, target_values, cv_folds)
+    metrics = append_classification_cv(metrics, "svm", x_encoded, target_values, cv_folds, options)
     details = {
         "Model": "SVC",
         "Kernel": model.kernel,
@@ -1533,23 +1768,21 @@ def fit_svm_model(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": None,
         "importances_html": None,
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
         "download_data": {
             "confusion_matrix": confusion.to_csv(),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_knn_model(data, target, predictors, test_size, cv_folds):
-    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False)
-    split = split_classification_data(target_values, x_encoded, test_size)
+def fit_knn_model(data, target, predictors, test_size, cv_folds, options=None):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
-    scaler = StandardScaler()
-    scaled_train = scaler.fit_transform(split["x_train"])
-    scaled_test = scaler.transform(split["x_test"])
+    scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
     neighbors = min(5, len(split["y_train"]))
     model = KNeighborsClassifier(n_neighbors=neighbors, weights="distance")
     model.fit(scaled_train, split["y_train"])
@@ -1564,7 +1797,7 @@ def fit_knn_model(data, target, predictors, test_size, cv_folds):
         {"label": "Neighbors", "value": neighbors},
         {"label": "Weights", "value": model.weights},
     ]
-    metrics = append_classification_cv(metrics, "knn", x_encoded, target_values, cv_folds)
+    metrics = append_classification_cv(metrics, "knn", x_encoded, target_values, cv_folds, options)
     details = {
         "Model": "KNeighborsClassifier",
         "Neighbors": neighbors,
@@ -1582,41 +1815,43 @@ def fit_knn_model(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": None,
         "importances_html": None,
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
         "download_data": {
             "confusion_matrix": confusion.to_csv(),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def prepare_regression_data(data, target, predictors):
+def prepare_regression_data(data, target, predictors, options=None):
     if target in predictors:
         raise ValueError("The target column cannot also be used as a predictor.")
 
     selected = [target] + predictors
-    model_data = data[selected].dropna()
-    if len(model_data) < 3:
-        raise ValueError("At least three complete rows are required.")
-
+    model_data = data[selected].copy()
     y_series = pd.to_numeric(model_data[target], errors="coerce")
     model_data = model_data.loc[y_series.notna()].copy()
-    y = y_series.loc[y_series.notna()].to_numpy(dtype=float)
+    model_data[target] = y_series.loc[y_series.notna()].to_numpy(dtype=float)
+    model_data = fill_missing_predictors(model_data, predictors, options)
+    model_data = apply_outlier_handling(model_data, target, predictors, "regression", options)
+    y = model_data[target].to_numpy(dtype=float)
     if len(y) < 3:
-        raise ValueError("The regression target must contain at least three numeric values.")
+        raise ValueError("The regression target must contain at least three numeric values after preprocessing.")
 
-    x_encoded = pd.get_dummies(model_data[predictors], drop_first=True, dtype=float)
+    x_encoded = encode_predictors(model_data, predictors, options)
     if x_encoded.empty:
         raise ValueError("At least one usable predictor is required.")
+    if x_encoded.isna().any().any():
+        raise ValueError("Preprocessing left missing predictor values. Choose imputation or drop incomplete rows.")
 
     return y, x_encoded
 
 
-def split_regression_data(y, x_encoded, test_size):
+def split_regression_data(y, x_encoded, test_size, options=None):
     indices = np.arange(len(y))
-    train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=42)
+    train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=preprocessing_seed(options))
     if len(train_idx) < 2 or len(test_idx) < 1:
         raise ValueError("The train/test split leaves too few rows for regression.")
 
@@ -1660,9 +1895,9 @@ def regression_coefficient_table(feature_names, coefficients):
     return coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format)
 
 
-def fit_linear_regression(data, target, predictors, test_size, cv_folds):
-    y, x_encoded = prepare_regression_data(data, target, predictors)
-    split = split_regression_data(y, x_encoded, test_size)
+def fit_linear_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
     x_train = np.column_stack([np.ones(len(split["x_train"])), split["x_train"].to_numpy(dtype=float)])
     x_test = np.column_stack([np.ones(len(split["x_test"])), split["x_test"].to_numpy(dtype=float)])
     feature_names = ["Intercept"] + list(x_encoded.columns)
@@ -1696,13 +1931,13 @@ def fit_linear_regression(data, target, predictors, test_size, cv_folds):
         {"label": "Train rows", "value": len(split["x_train"])},
         {"label": "Test rows", "value": len(split["x_test"])},
     ] + regression_metric_list(split["y_test"], test_predictions, parameter_count=rank)[1:]
-    metrics = append_regression_cv(metrics, "linear", x_encoded, y, cv_folds)
+    metrics = append_regression_cv(metrics, "linear", x_encoded, y, cv_folds, options)
     details = {
         "Model": "Ordinary least squares",
         "Train residual df": train_residual_df,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
 
     return {
@@ -1712,20 +1947,18 @@ def fit_linear_regression(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
             "coefficients": coefficients.to_csv(index=False),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_ridge_regression(data, target, predictors, test_size, cv_folds):
-    y, x_encoded = prepare_regression_data(data, target, predictors)
-    split = split_regression_data(y, x_encoded, test_size)
-    scaler = StandardScaler()
-    scaled_train = scaler.fit_transform(split["x_train"])
-    scaled_test = scaler.transform(split["x_test"])
+def fit_ridge_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
     model = Ridge(alpha=1.0)
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
@@ -1734,14 +1967,14 @@ def fit_ridge_regression(data, target, predictors, test_size, cv_folds):
         {"label": "Train rows", "value": len(split["x_train"])},
         {"label": "Test rows", "value": len(split["x_test"])},
     ] + regression_metric_list(split["y_test"], predictions, parameter_count=scaled_train.shape[1] + 1)[1:]
-    metrics = append_regression_cv(metrics, "ridge", x_encoded, y, cv_folds)
+    metrics = append_regression_cv(metrics, "ridge", x_encoded, y, cv_folds, options)
     details = {
         "Model": "Ridge",
         "Alpha": model.alpha,
-        "Feature scaling": "StandardScaler",
+        "Feature scaling": scaling_label,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
     coefficients = pd.DataFrame({"Term": ["Intercept"] + list(x_encoded.columns), "Coefficient": [model.intercept_] + list(model.coef_)})
 
@@ -1752,21 +1985,19 @@ def fit_ridge_regression(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
             "coefficients": coefficients.to_csv(index=False),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_lasso_regression(data, target, predictors, test_size, cv_folds):
-    y, x_encoded = prepare_regression_data(data, target, predictors)
-    split = split_regression_data(y, x_encoded, test_size)
-    scaler = StandardScaler()
-    scaled_train = scaler.fit_transform(split["x_train"])
-    scaled_test = scaler.transform(split["x_test"])
-    model = Lasso(alpha=0.1, max_iter=10000, random_state=42)
+def fit_lasso_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
+    model = Lasso(alpha=0.1, max_iter=10000, random_state=preprocessing_seed(options))
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
     nonzero_count = int(np.sum(np.abs(model.coef_) > 1e-8))
@@ -1775,15 +2006,15 @@ def fit_lasso_regression(data, target, predictors, test_size, cv_folds):
         {"label": "Train rows", "value": len(split["x_train"])},
         {"label": "Test rows", "value": len(split["x_test"])},
     ] + regression_metric_list(split["y_test"], predictions, parameter_count=nonzero_count + 1)[1:]
-    metrics = append_regression_cv(metrics, "lasso", x_encoded, y, cv_folds)
+    metrics = append_regression_cv(metrics, "lasso", x_encoded, y, cv_folds, options)
     details = {
         "Model": "Lasso",
         "Alpha": model.alpha,
         "Non-zero coefficients": nonzero_count,
-        "Feature scaling": "StandardScaler",
+        "Feature scaling": scaling_label,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
     coefficients = pd.DataFrame({"Term": ["Intercept"] + list(x_encoded.columns), "Coefficient": [model.intercept_] + list(model.coef_)})
 
@@ -1794,22 +2025,22 @@ def fit_lasso_regression(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
         "importances_html": None,
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
             "coefficients": coefficients.to_csv(index=False),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_random_forest_regression(data, target, predictors, test_size, cv_folds):
-    y, x_encoded = prepare_regression_data(data, target, predictors)
-    split = split_regression_data(y, x_encoded, test_size)
+def fit_random_forest_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
     min_samples_leaf = max(1, int(len(split["y_train"]) * 0.01))
     model = RandomForestRegressor(
         n_estimators=200,
         min_samples_leaf=min_samples_leaf,
-        random_state=42,
+        random_state=preprocessing_seed(options),
         n_jobs=-1,
     )
     model.fit(split["x_train"], split["y_train"])
@@ -1819,14 +2050,14 @@ def fit_random_forest_regression(data, target, predictors, test_size, cv_folds):
         {"label": "Train rows", "value": len(split["x_train"])},
         {"label": "Test rows", "value": len(split["x_test"])},
     ] + regression_metric_list(split["y_test"], predictions)[1:]
-    metrics = append_regression_cv(metrics, "random_forest", x_encoded, y, cv_folds)
+    metrics = append_regression_cv(metrics, "random_forest", x_encoded, y, cv_folds, options)
     details = {
         "Model": "RandomForestRegressor",
         "Trees": model.n_estimators,
         "Minimum samples per leaf": min_samples_leaf,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
     importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
 
@@ -1837,22 +2068,22 @@ def fit_random_forest_regression(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
             "variable_importance": importances.to_csv(index=False),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_gradient_boosting_regression(data, target, predictors, test_size, cv_folds):
-    y, x_encoded = prepare_regression_data(data, target, predictors)
-    split = split_regression_data(y, x_encoded, test_size)
+def fit_gradient_boosting_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
     model = GradientBoostingRegressor(
         n_estimators=100,
         learning_rate=0.1,
         max_depth=3,
-        random_state=42,
+        random_state=preprocessing_seed(options),
     )
     model.fit(split["x_train"], split["y_train"])
     predictions = model.predict(split["x_test"])
@@ -1861,7 +2092,7 @@ def fit_gradient_boosting_regression(data, target, predictors, test_size, cv_fol
         {"label": "Train rows", "value": len(split["x_train"])},
         {"label": "Test rows", "value": len(split["x_test"])},
     ] + regression_metric_list(split["y_test"], predictions)[1:]
-    metrics = append_regression_cv(metrics, "gradient_boosting", x_encoded, y, cv_folds)
+    metrics = append_regression_cv(metrics, "gradient_boosting", x_encoded, y, cv_folds, options)
     details = {
         "Model": "GradientBoostingRegressor",
         "Boosting stages": model.n_estimators,
@@ -1869,7 +2100,7 @@ def fit_gradient_boosting_regression(data, target, predictors, test_size, cv_fol
         "Maximum tree depth": model.max_depth,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
     importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
 
@@ -1880,20 +2111,18 @@ def fit_gradient_boosting_regression(data, target, predictors, test_size, cv_fol
         "metrics": metrics,
         "coefficients_html": None,
         "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
             "variable_importance": importances.to_csv(index=False),
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_svr_regression(data, target, predictors, test_size, cv_folds):
-    y, x_encoded = prepare_regression_data(data, target, predictors)
-    split = split_regression_data(y, x_encoded, test_size)
-    scaler = StandardScaler()
-    scaled_train = scaler.fit_transform(split["x_train"])
-    scaled_test = scaler.transform(split["x_test"])
+def fit_svr_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
     model = SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale")
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
@@ -1902,7 +2131,7 @@ def fit_svr_regression(data, target, predictors, test_size, cv_folds):
         {"label": "Train rows", "value": len(split["x_train"])},
         {"label": "Test rows", "value": len(split["x_test"])},
     ] + regression_metric_list(split["y_test"], predictions)[1:]
-    metrics = append_regression_cv(metrics, "svr", x_encoded, y, cv_folds)
+    metrics = append_regression_cv(metrics, "svr", x_encoded, y, cv_folds, options)
     details = {
         "Model": "SVR",
         "Kernel": model.kernel,
@@ -1910,10 +2139,10 @@ def fit_svr_regression(data, target, predictors, test_size, cv_folds):
         "Epsilon": model.epsilon,
         "Gamma": model.gamma,
         "Support vectors": len(model.support_),
-        "Feature scaling": "StandardScaler",
+        "Feature scaling": scaling_label,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
 
     return {
@@ -1923,19 +2152,17 @@ def fit_svr_regression(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": None,
         "importances_html": None,
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
 
-def fit_knn_regression(data, target, predictors, test_size, cv_folds):
-    y, x_encoded = prepare_regression_data(data, target, predictors)
-    split = split_regression_data(y, x_encoded, test_size)
-    scaler = StandardScaler()
-    scaled_train = scaler.fit_transform(split["x_train"])
-    scaled_test = scaler.transform(split["x_test"])
+def fit_knn_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
     neighbors = min(5, len(split["y_train"]))
     model = KNeighborsRegressor(n_neighbors=neighbors, weights="distance")
     model.fit(scaled_train, split["y_train"])
@@ -1945,16 +2172,16 @@ def fit_knn_regression(data, target, predictors, test_size, cv_folds):
         {"label": "Train rows", "value": len(split["x_train"])},
         {"label": "Test rows", "value": len(split["x_test"])},
     ] + regression_metric_list(split["y_test"], predictions)[1:]
-    metrics = append_regression_cv(metrics, "knn", x_encoded, y, cv_folds)
+    metrics = append_regression_cv(metrics, "knn", x_encoded, y, cv_folds, options)
     details = {
         "Model": "KNeighborsRegressor",
         "Neighbors": neighbors,
         "Weights": model.weights,
         "Distance metric": model.metric,
-        "Feature scaling": "StandardScaler",
+        "Feature scaling": scaling_label,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
-        "Random seed": 42,
+        "Random seed": preprocessing_seed(options),
     }
 
     return {
@@ -1964,9 +2191,9 @@ def fit_knn_regression(data, target, predictors, test_size, cv_folds):
         "metrics": metrics,
         "coefficients_html": None,
         "importances_html": None,
-        "details_html": details_table(details),
+        "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
-            "details": details_frame(details).to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
 
@@ -2010,6 +2237,11 @@ CLASSIFICATION_TAB_CONFIGS = {
         "predictors_field": "pro_classification_predictors",
         "test_size_field": "pro_classification_test_size",
         "cv_folds_field": "pro_classification_cv_folds",
+        "missing_values_field": "pro_classification_missing_values",
+        "categorical_encoding_field": "pro_classification_categorical_encoding",
+        "scaling_field": "pro_classification_scaling",
+        "split_seed_field": "pro_classification_split_seed",
+        "outlier_handling_field": "pro_classification_outlier_handling",
         "default_model": "logistic",
         "allow_model_comparison": True,
     },
@@ -2035,6 +2267,11 @@ REGRESSION_TAB_CONFIGS = {
         "predictors_field": "pro_regression_predictors",
         "test_size_field": "pro_regression_test_size",
         "cv_folds_field": "pro_regression_cv_folds",
+        "missing_values_field": "pro_regression_missing_values",
+        "categorical_encoding_field": "pro_regression_categorical_encoding",
+        "scaling_field": "pro_regression_scaling",
+        "split_seed_field": "pro_regression_split_seed",
+        "outlier_handling_field": "pro_regression_outlier_handling",
         "default_model": "linear",
         "allow_model_comparison": True,
     },
@@ -2051,12 +2288,18 @@ def make_model_tab(config):
             "allow_model_comparison": config.get("allow_model_comparison", False),
             "selected_test_size": 0.2,
             "selected_cv_folds": 0,
+            "selected_missing_values": "drop",
+            "selected_categorical_encoding": "one_hot_drop_first",
+            "selected_scaling": "on",
+            "selected_split_seed": 42,
+            "selected_outlier_handling": "none",
             "selected_target": None,
             "selected_predictors": [],
             "error": None,
             "output": None,
             "comparison_html": None,
             "comparison_download": None,
+            "report_download": None,
             "run_history": [],
         }
     )
@@ -2113,6 +2356,24 @@ def populate_tab_from_request(tab):
 
     tab["selected_test_size"] = parse_test_size(request.form.get(tab["test_size_field"]))
     tab["selected_cv_folds"] = parse_cv_folds(request.form.get(tab["cv_folds_field"]))
+    if tab.get("allow_model_comparison"):
+        tab["selected_missing_values"] = parse_choice(
+            request.form.get(tab["missing_values_field"]),
+            {"drop", "impute_mean_mode", "impute_median_mode"},
+            "drop",
+        )
+        tab["selected_categorical_encoding"] = parse_choice(
+            request.form.get(tab["categorical_encoding_field"]),
+            {"one_hot_drop_first", "one_hot_full", "ordinal"},
+            "one_hot_drop_first",
+        )
+        tab["selected_scaling"] = parse_choice(request.form.get(tab["scaling_field"]), {"on", "off"}, "on")
+        tab["selected_split_seed"] = parse_split_seed(request.form.get(tab["split_seed_field"]))
+        tab["selected_outlier_handling"] = parse_choice(
+            request.form.get(tab["outlier_handling_field"]),
+            {"none", "winsorize", "remove_iqr"},
+            "none",
+        )
     tab["selected_target"] = request.form.get(tab["target_field"])
     tab["selected_predictors"] = request.form.getlist(tab["predictors_field"])
 
@@ -2254,11 +2515,11 @@ def threshold_analysis_table(y_true, scores):
     return pd.DataFrame(rows)
 
 
-def add_binary_classification_analytics(output, data, target, predictors, model_name, test_size):
+def add_binary_classification_analytics(output, data, target, predictors, model_name, test_size, options=None):
     try:
-        _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True)
-        split = split_classification_data(target_values, x_encoded, test_size)
-        estimator = classification_estimator(model_name)
+        _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True, options=options)
+        split = split_classification_data(target_values, x_encoded, test_size, options)
+        estimator = classification_estimator(model_name, options)
         estimator.fit(split["x_train"], split["y_train"])
         scores = classification_score_values(estimator, split["x_test"])
         y_true = split["y_test"]
@@ -2338,11 +2599,11 @@ def histogram_plot_image(values, xlabel, title):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def add_regression_analytics(output, data, target, predictors, model_name, test_size):
+def add_regression_analytics(output, data, target, predictors, model_name, test_size, options=None):
     try:
-        y, x_encoded = prepare_regression_data(data, target, predictors)
-        split = split_regression_data(y, x_encoded, test_size)
-        estimator = regression_estimator(model_name)
+        y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+        split = split_regression_data(y, x_encoded, test_size, options)
+        estimator = regression_estimator(model_name, options)
         estimator.fit(split["x_train"], split["y_train"])
         predictions = estimator.predict(split["x_test"])
         residuals = split["y_test"] - predictions
@@ -2424,6 +2685,7 @@ def comparison_row_status(model_name, best_model_name, detail_model_name):
     return " / ".join(labels) if labels else "Fit"
 
 def handle_classification_comparison_submission(tab, dataset):
+    options = preprocessing_options(tab)
     successful_outputs = []
     rows = []
 
@@ -2437,6 +2699,7 @@ def handle_classification_comparison_submission(tab, dataset):
                 tab["selected_predictors"],
                 tab["selected_test_size"],
                 tab["selected_cv_folds"],
+                options,
             )
             accuracy = metric_float(output, "Test accuracy")
             cv_accuracy = metric_float(output, "CV accuracy mean")
@@ -2487,6 +2750,7 @@ def handle_classification_comparison_submission(tab, dataset):
             tab["selected_predictors"],
             detail_model_name,
             tab["selected_test_size"],
+            options,
         )
         tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
@@ -2557,6 +2821,14 @@ def current_pro_run_scope():
     return user_id, current_id
 
 
+def pro_report_download(tab_name):
+    if tab_name not in PRO_TAB_NAMES:
+        return None
+    return {
+        "href": url_for("download_result", result_type=tab_name, artifact="pro_report"),
+        "label": "Download Pro report",
+    }
+
 def tab_download_artifacts(tab):
     current_id = dataset_id()
     if not current_id:
@@ -2622,6 +2894,11 @@ def save_pro_run(tab):
         "selected_detail_model": tab.get("selected_detail_model", "best"),
         "selected_test_size": tab.get("selected_test_size"),
         "selected_cv_folds": tab.get("selected_cv_folds"),
+        "selected_missing_values": tab.get("selected_missing_values"),
+        "selected_categorical_encoding": tab.get("selected_categorical_encoding"),
+        "selected_scaling": tab.get("selected_scaling"),
+        "selected_split_seed": tab.get("selected_split_seed"),
+        "selected_outlier_handling": tab.get("selected_outlier_handling"),
         "selected_target": tab.get("selected_target"),
         "selected_predictors": list(tab.get("selected_predictors", [])),
         "comparison_html": tab.get("comparison_html"),
@@ -2656,6 +2933,11 @@ def restore_pro_run(tab, snapshot):
         "selected_detail_model",
         "selected_test_size",
         "selected_cv_folds",
+        "selected_missing_values",
+        "selected_categorical_encoding",
+        "selected_scaling",
+        "selected_split_seed",
+        "selected_outlier_handling",
         "selected_target",
         "selected_predictors",
         "comparison_html",
@@ -2664,6 +2946,7 @@ def restore_pro_run(tab, snapshot):
     ]:
         tab[key] = deepcopy(snapshot.get(key))
     restore_download_artifacts(tab, snapshot)
+    tab["report_download"] = pro_report_download(tab["form_name"])
 
 
 def restore_pro_runs(model_tabs, exclude=None):
@@ -2711,6 +2994,7 @@ REGRESSION_MODEL_LABELS = {
 
 
 def handle_regression_comparison_submission(tab, dataset):
+    options = preprocessing_options(tab)
     successful_outputs = []
     rows = []
 
@@ -2724,6 +3008,7 @@ def handle_regression_comparison_submission(tab, dataset):
                 tab["selected_predictors"],
                 tab["selected_test_size"],
                 tab["selected_cv_folds"],
+                options,
             )
             r_squared = metric_float(output, "Test R squared")
             rmse = metric_float(output, "Test RMSE")
@@ -2775,6 +3060,7 @@ def handle_regression_comparison_submission(tab, dataset):
             tab["selected_predictors"],
             detail_model_name,
             tab["selected_test_size"],
+            options,
         )
         tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
@@ -2921,6 +3207,156 @@ def logout():
     return redirect(url_for("index"))
 
 
+def latest_pro_run_snapshot(tab_name):
+    runs = load_pro_runs_from_db(tab_name)
+    return runs[0] if runs else None
+
+
+def csv_report_table(csv_data, css_class="report-table"):
+    if not csv_data:
+        return ""
+    try:
+        return pd.read_csv(StringIO(csv_data)).to_html(index=False, border=0, classes=css_class)
+    except Exception:
+        return f"<pre>{html.escape(csv_data)}</pre>"
+
+
+def metrics_report_table(metrics):
+    if not metrics:
+        return ""
+    rows = [{"Metric": item.get("label", ""), "Value": item.get("value", "")} for item in metrics]
+    return pd.DataFrame(rows).to_html(index=False, border=0, classes="report-table")
+
+
+def report_model_labels(tab_name, models):
+    tab = {"form_name": tab_name}
+    return ", ".join(model_label_for_run(tab, model) for model in models)
+
+
+def report_metadata_table(tab_name, snapshot, dataset):
+    data = dataset.get("data") if dataset else None
+    history_entry = snapshot.get("history_entry") or {}
+    detail_model = snapshot.get("selected_model") or snapshot.get("selected_detail_model") or "-"
+    cv_folds = snapshot.get("selected_cv_folds")
+    rows = [
+        {"Field": "Generated", "Value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+        {"Field": "Run time", "Value": history_entry.get("timestamp", "-")},
+        {"Field": "Report type", "Value": "Pro classification" if tab_name == "pro_classification" else "Pro regression"},
+        {"Field": "Dataset", "Value": dataset.get("filename", "-") if dataset else "-"},
+        {"Field": "Rows", "Value": len(data) if data is not None else "-"},
+        {"Field": "Columns", "Value": len(data.columns) if data is not None else "-"},
+        {"Field": "Target", "Value": snapshot.get("selected_target") or "-"},
+        {"Field": "Predictors", "Value": ", ".join(snapshot.get("selected_predictors") or []) or "-"},
+        {"Field": "Models compared", "Value": report_model_labels(tab_name, snapshot.get("selected_models") or []) or "-"},
+        {"Field": "Detail model", "Value": model_label_for_run({"form_name": tab_name}, detail_model)},
+        {"Field": "Test split", "Value": f"{float(snapshot.get('selected_test_size') or 0):.0%}"},
+        {"Field": "Cross-validation", "Value": f"{cv_folds} folds" if cv_folds else "Off"},
+        {"Field": "Missing values", "Value": preprocessing_details(snapshot).get("Missing values", "-")},
+        {"Field": "Categorical encoding", "Value": preprocessing_details(snapshot).get("Categorical encoding", "-")},
+        {"Field": "Feature scaling", "Value": preprocessing_details(snapshot).get("Feature scaling", "-")},
+        {"Field": "Split seed", "Value": snapshot.get("selected_split_seed", 42)},
+        {"Field": "Outlier handling", "Value": preprocessing_details(snapshot).get("Outlier handling", "-")},
+    ]
+    return pd.DataFrame(rows).to_html(index=False, border=0, classes="report-table")
+
+
+def report_image(title, image_data, alt_text):
+    if not image_data:
+        return ""
+    return (
+        f"<section><h2>{html.escape(title)}</h2>"
+        f"<img class=\"report-plot\" src=\"data:image/png;base64,{html.escape(image_data)}\" "
+        f"alt=\"{html.escape(alt_text)}\"></section>"
+    )
+
+
+def pro_report_html(tab_name, snapshot, dataset):
+    output = snapshot.get("output") or {}
+    artifacts = snapshot.get("download_artifacts") or {}
+    report_title = "Pro Classification Report" if tab_name == "pro_classification" else "Pro Regression Report"
+    selected_title = output.get("title") or "Selected model results"
+    selected_description = output.get("description") or ""
+    sections = [
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
+        f"<title>{html.escape(report_title)}</title>",
+        """
+        <style>
+          body { color: #1f2933; font-family: Arial, sans-serif; line-height: 1.45; margin: 32px; }
+          h1 { font-size: 28px; margin-bottom: 6px; }
+          h2 { border-bottom: 1px solid #d8dee8; font-size: 20px; margin-top: 30px; padding-bottom: 6px; }
+          h3 { font-size: 16px; margin-top: 22px; }
+          .muted { color: #64748b; }
+          .report-table { border-collapse: collapse; margin: 10px 0 18px; width: 100%; }
+          .report-table th, .report-table td { border: 1px solid #d8dee8; padding: 7px 9px; text-align: left; vertical-align: top; }
+          .report-table th { background: #f5f7fa; }
+          .report-plot { border: 1px solid #d8dee8; max-width: 100%; }
+          pre { background: #f5f7fa; border: 1px solid #d8dee8; overflow: auto; padding: 12px; }
+        </style></head><body>
+        """,
+        f"<h1>{html.escape(report_title)}</h1>",
+        f"<p class=\"muted\">Single-run export for the selected Pro model comparison.</p>",
+        "<section><h2>Dataset metadata</h2>",
+        report_metadata_table(tab_name, snapshot, dataset),
+        "</section>",
+    ]
+
+    comparison_table = csv_report_table(artifacts.get("model_comparison"))
+    if comparison_table:
+        sections.extend(["<section><h2>Model comparison</h2>", comparison_table, "</section>"])
+
+    sections.extend([
+        "<section><h2>Selected detail model</h2>",
+        f"<h3>{html.escape(selected_title)}</h3>",
+        f"<p>{html.escape(selected_description)}</p>",
+    ])
+    metric_table = metrics_report_table(output.get("metrics") or [])
+    if metric_table:
+        sections.extend(["<h3>Metrics</h3>", metric_table])
+    for heading, key in [
+        ("Coefficients", "coefficients_html"),
+        ("Variable importance", "importances_html"),
+        ("Model details", "details_html"),
+        ("Confusion matrix", "confusion_html"),
+    ]:
+        if output.get(key):
+            sections.extend([f"<h3>{heading}</h3>", output[key]])
+    sections.append("</section>")
+
+    if tab_name == "pro_classification":
+        sections.extend(
+            [
+                report_image("ROC curve", output.get("roc_plot"), "ROC curve"),
+                report_image("Precision-recall curve", output.get("pr_plot"), "Precision-recall curve"),
+                report_image("Classification tree", output.get("tree_plot"), "Classification tree"),
+            ]
+        )
+        threshold_table = csv_report_table(artifacts.get("threshold_analysis"))
+        if threshold_table:
+            sections.extend(["<section><h2>Threshold analysis</h2>", threshold_table, "</section>"])
+    else:
+        sections.extend(
+            [
+                report_image("Predicted vs actual", output.get("predicted_actual_plot"), "Predicted vs actual plot"),
+                report_image("Residuals vs fitted", output.get("residuals_fitted_plot"), "Residuals vs fitted plot"),
+                report_image("Residual distribution", output.get("residual_distribution_plot"), "Residual distribution plot"),
+            ]
+        )
+        residual_table = csv_report_table(artifacts.get("residual_diagnostics"))
+        if residual_table:
+            sections.extend(["<section><h2>Residual diagnostics</h2>", residual_table, "</section>"])
+
+    sections.append("</body></html>")
+    return "".join(sections)
+
+
+def durable_pro_report(result_type):
+    if result_type not in PRO_TAB_NAMES:
+        return None
+    snapshot = latest_pro_run_snapshot(result_type)
+    if not snapshot:
+        return None
+    return pro_report_html(result_type, snapshot, current_dataset())
+
 def durable_download_artifact(result_type, artifact):
     user_id, current_id = current_pro_run_scope()
     if not user_id or not current_id or result_type not in PRO_TAB_NAMES:
@@ -2954,6 +3390,17 @@ def download_result(result_type, artifact):
     if not is_user_authenticated():
         return Response("Authentication required.", status=401, mimetype="text/plain")
 
+    if artifact == "pro_report":
+        report_html = durable_pro_report(result_type)
+        if report_html is None:
+            return Response("No Pro report is available for this selection.", status=404, mimetype="text/plain")
+        filename = f"{result_type}_report.html"
+        return Response(
+            report_html,
+            mimetype="text/html",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
     current_id = dataset_id()
     csv_data = DOWNLOADS.get(current_id, {}).get(result_type, {}).get(artifact)
     if csv_data is None:
@@ -2971,4 +3418,24 @@ def download_result(result_type, artifact):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
