@@ -6,6 +6,7 @@ import html
 import json
 import math
 import sqlite3
+import textwrap
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import pandas as pd
 from flask import Flask, Response, redirect, render_template_string, request, session, url_for
@@ -213,16 +215,25 @@ PAGE_TEMPLATE = """
             <div class="table-wrap">
               {{ tab.comparison_html|safe }}
             </div>
+            {% if tab.detail_metric_comparison_html %}
+              <h3>Selected model tuning comparison</h3>
+              <div class="table-wrap">
+                {{ tab.detail_metric_comparison_html|safe }}
+              </div>
+            {% endif %}
           </div>
         {% endif %}
         {% if tab.output %}
           <div class="panel">
             <h2>{{ tab.output.title }}</h2>
             <p>{{ tab.output.description }}</p>
-            {% if tab.output.downloads or tab.report_download %}
+            {% if tab.output.downloads or tab.report_download or tab.report_pdf_download %}
               <div class="download-links">
                 {% if tab.report_download %}
                   <a href="{{ tab.report_download.href }}">{{ tab.report_download.label }}</a>
+                {% endif %}
+                {% if tab.report_pdf_download %}
+                  <a href="{{ tab.report_pdf_download.href }}">{{ tab.report_pdf_download.label }}</a>
                 {% endif %}
                 {% for download in tab.output.downloads %}
                   <a href="{{ download.href }}">{{ download.label }}</a>
@@ -456,16 +467,25 @@ PAGE_TEMPLATE = """
             <div class="table-wrap">
               {{ tab.comparison_html|safe }}
             </div>
+            {% if tab.detail_metric_comparison_html %}
+              <h3>Selected model tuning comparison</h3>
+              <div class="table-wrap">
+                {{ tab.detail_metric_comparison_html|safe }}
+              </div>
+            {% endif %}
           </div>
         {% endif %}
         {% if tab.output %}
           <div class="panel">
             <h2>{{ tab.output.title }}</h2>
             <p>{{ tab.output.description }}</p>
-            {% if tab.output.downloads or tab.report_download %}
+            {% if tab.output.downloads or tab.report_download or tab.report_pdf_download %}
               <div class="download-links">
                 {% if tab.report_download %}
                   <a href="{{ tab.report_download.href }}">{{ tab.report_download.label }}</a>
+                {% endif %}
+                {% if tab.report_pdf_download %}
+                  <a href="{{ tab.report_pdf_download.href }}">{{ tab.report_pdf_download.label }}</a>
                 {% endif %}
                 {% for download in tab.output.downloads %}
                   <a href="{{ download.href }}">{{ download.label }}</a>
@@ -511,6 +531,12 @@ PAGE_TEMPLATE = """
               <h3>Residual distribution</h3>
               <div class="tree-plot">
                 <img src="data:image/png;base64,{{ tab.output.residual_distribution_plot }}" alt="Residual distribution plot">
+              </div>
+            {% endif %}
+            {% if tab.output.residual_diagnostics_html %}
+              <h3>Residual diagnostics</h3>
+              <div class="table-wrap">
+                {{ tab.output.residual_diagnostics_html|safe }}
               </div>
             {% endif %}
           </div>
@@ -769,6 +795,51 @@ PAGE_TEMPLATE = """
       tr:nth-child(even) td {
         background: #fbfcfe;
       }
+      .model-comparison tbody tr {
+        cursor: pointer;
+      }
+      .model-comparison tbody tr:hover td {
+        background: #eef6ff;
+      }
+      .model-comparison tbody tr.best-row td {
+        border-left: 4px solid #0f766e;
+      }
+      .model-comparison tbody tr.selected-row td {
+        background: #eef2ff;
+        box-shadow: inset 0 1px 0 #c7d2fe, inset 0 -1px 0 #c7d2fe;
+      }
+      .model-comparison tbody tr.selected-row.best-row td {
+        background: #ecfdf5;
+      }
+      .status-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .status-badge {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 750;
+        line-height: 1;
+        padding: 5px 8px;
+        white-space: nowrap;
+      }
+      .status-badge.best {
+        background: #ccfbf1;
+        border-color: #5eead4;
+        color: #115e59;
+      }
+      .status-badge.selected {
+        background: #e0e7ff;
+        border-color: #a5b4fc;
+        color: #3730a3;
+      }
+      .status-badge.fit {
+        background: #f8fafc;
+      }
       @media (max-width: 760px) {
         .metric-row {
           grid-template-columns: 1fr;
@@ -905,6 +976,22 @@ PAGE_TEMPLATE = """
           event.preventDefault();
           history.replaceState(null, "", tab.getAttribute("href"));
           activateTab(tab.getAttribute("href"));
+        });
+      });
+
+      document.querySelectorAll(".model-comparison tbody tr[data-model-name]").forEach((row) => {
+        row.addEventListener("click", () => {
+          const panel = row.closest(".tab-panel");
+          if (!panel) {
+            return;
+          }
+          const detailSelect = panel.querySelector("select[name$='_detail_model']");
+          const form = panel.querySelector("form");
+          if (!detailSelect || !form) {
+            return;
+          }
+          detailSelect.value = row.dataset.modelName;
+          form.requestSubmit ? form.requestSubmit() : form.submit();
         });
       });
 
@@ -2479,8 +2566,10 @@ def make_model_tab(config):
             "error": None,
             "output": None,
             "comparison_html": None,
+            "detail_metric_comparison_html": None,
             "comparison_download": None,
             "report_download": None,
+            "report_pdf_download": None,
             "run_history": [],
         }
     )
@@ -2958,6 +3047,7 @@ def add_regression_analytics(output, data, target, predictors, model_name, test_
             "Residual",
             "Residual distribution",
         )
+        output["residual_diagnostics_html"] = diagnostics.head(25).to_html(index=False, border=0, classes="residual-diagnostics")
         output.setdefault("download_data", {})["residual_diagnostics"] = diagnostics.to_csv(index=False)
         output.setdefault("metrics", []).extend(
             [
@@ -2969,6 +3059,7 @@ def add_regression_analytics(output, data, target, predictors, model_name, test_
         output["predicted_actual_plot"] = None
         output["residuals_fitted_plot"] = None
         output["residual_distribution_plot"] = None
+        output["residual_diagnostics_html"] = None
     return output
 def register_comparison_download(tab, comparison):
     current_id = dataset_id()
@@ -2982,10 +3073,68 @@ def register_comparison_download(tab, comparison):
     }
 
 
+def status_badges(row):
+    badges = []
+    if row.get("_is_best"):
+        badges.append('<span class="status-badge best">Best</span>')
+    if row.get("_is_detail"):
+        badges.append('<span class="status-badge selected">Selected</span>')
+    status = row.get("Status", "Fit")
+    if status and status not in {"Fit", "Best", "Detailed", "Best / Detailed"}:
+        badges.append(f'<span class="status-badge fit">{html.escape(str(status))}</span>')
+    if not badges:
+        badges.append('<span class="status-badge fit">Fit</span>')
+    return f'<span class="status-badges">{"".join(badges)}</span>'
+
+
 def comparison_html(rows, display_columns):
-    comparison = pd.DataFrame(rows)
+    comparison = pd.DataFrame([{key: value for key, value in row.items() if not key.startswith("_")} for row in rows])
     comparison = comparison[display_columns]
-    return comparison.to_html(index=False, border=0, classes="model-comparison"), comparison
+    header_cells = "".join(f"<th>{html.escape(column)}</th>" for column in display_columns)
+    body_rows = []
+    for row in rows:
+        row_classes = ["best-row" if row.get("_is_best") else "", "selected-row" if row.get("_is_detail") else ""]
+        class_attr = " ".join(row_class for row_class in row_classes if row_class)
+        class_attr = f' class="{class_attr}"' if class_attr else ""
+        model_attr = html.escape(str(row.get("_model_name", "")), quote=True)
+        cells = []
+        for column in display_columns:
+            if column == "Status":
+                cells.append(f"<td>{status_badges(row)}</td>")
+            else:
+                cells.append(f"<td>{html.escape(str(row.get(column, '')))}</td>")
+        body_rows.append(f'<tr{class_attr} data-model-name="{model_attr}">{"".join(cells)}</tr>')
+    table_html = f'<table class="dataframe model-comparison"><thead><tr>{header_cells}</tr></thead><tbody>{"".join(body_rows)}</tbody></table>'
+    return table_html, comparison
+
+
+def detail_metric_comparison_html(tab, rows, model_name, display_columns):
+    if not tuning_enabled(tab):
+        return None
+
+    selected_row = next((row for row in rows if row.get("_model_name") == model_name), None)
+    if not selected_row:
+        return None
+
+    if tab["form_name"] == "pro_classification":
+        metric_rows = [
+            {"Metric": "Accuracy", "Default": selected_row.get("Default accuracy", "-"), "Tuned": selected_row.get("Tuned accuracy", "-")},
+            {"Metric": "CV accuracy", "Default": selected_row.get("Default CV accuracy", "-"), "Tuned": selected_row.get("Tuned CV accuracy", "-")},
+            {"Metric": "Precision", "Default": selected_row.get("Precision", "-"), "Tuned": "-"},
+            {"Metric": "Recall", "Default": selected_row.get("Recall", "-"), "Tuned": "-"},
+            {"Metric": "F1", "Default": selected_row.get("F1", "-"), "Tuned": "-"},
+        ]
+    else:
+        metric_rows = [
+            {"Metric": "RMSE", "Default": selected_row.get("Default RMSE", "-"), "Tuned": selected_row.get("Tuned RMSE", "-")},
+            {"Metric": "CV RMSE", "Default": selected_row.get("Default CV RMSE", "-"), "Tuned": selected_row.get("Tuned CV RMSE", "-")},
+            {"Metric": "R squared", "Default": selected_row.get("Test R squared", "-"), "Tuned": "-"},
+            {"Metric": "CV R squared", "Default": selected_row.get("CV R squared", "-"), "Tuned": "-"},
+            {"Metric": "MAE", "Default": selected_row.get("Test MAE", "-"), "Tuned": "-"},
+        ]
+
+    metric_rows.append({"Metric": "Best params", "Default": "-", "Tuned": selected_row.get("Best params", "-")})
+    return pd.DataFrame(metric_rows)[display_columns].to_html(index=False, border=0, classes="detail-metric-comparison")
 
 
 
@@ -3132,12 +3281,20 @@ def handle_classification_comparison_submission(tab, dataset):
         )
         tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
+            row["_is_best"] = row["_model_name"] == best_model_name
+            row["_is_detail"] = row["_model_name"] == detail_model_name
             row["Status"] = comparison_row_status(row["_model_name"], best_model_name, detail_model_name)
+        tab["detail_metric_comparison_html"] = detail_metric_comparison_html(
+            tab,
+            rows,
+            detail_model_name,
+            ["Metric", "Default", "Tuned"],
+        )
     else:
         tab["error"] = "No selected model could be fit."
+        tab["detail_metric_comparison_html"] = None
 
-    table_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
-    tab["comparison_html"], comparison = comparison_html(table_rows, ["Model", "Default accuracy", "Default CV accuracy", "Tuned accuracy", "Tuned CV accuracy", "Precision", "Recall", "F1", "Best params", "Status"])
+    tab["comparison_html"], comparison = comparison_html(rows, ["Model", "Default accuracy", "Default CV accuracy", "Tuned accuracy", "Tuned CV accuracy", "Precision", "Recall", "F1", "Best params", "Status"])
     tab["comparison_download"] = register_comparison_download(tab, comparison)
 
 PRO_TAB_NAMES = {"pro_classification", "pro_regression"}
@@ -3206,6 +3363,16 @@ def pro_report_download(tab_name):
         "href": url_for("download_result", result_type=tab_name, artifact="pro_report"),
         "label": "Download Pro report",
     }
+
+
+def pro_report_pdf_download(tab_name):
+    if tab_name not in PRO_TAB_NAMES:
+        return None
+    return {
+        "href": url_for("download_result", result_type=tab_name, artifact="pro_report_pdf"),
+        "label": "Download Pro report PDF",
+    }
+
 
 def tab_download_artifacts(tab):
     current_id = dataset_id()
@@ -3282,6 +3449,7 @@ def save_pro_run(tab):
         "selected_target": tab.get("selected_target"),
         "selected_predictors": list(tab.get("selected_predictors", [])),
         "comparison_html": tab.get("comparison_html"),
+        "detail_metric_comparison_html": tab.get("detail_metric_comparison_html"),
         "comparison_download": deepcopy(tab.get("comparison_download")),
         "output": deepcopy(tab.get("output")),
         "download_artifacts": tab_download_artifacts(tab),
@@ -3323,12 +3491,14 @@ def restore_pro_run(tab, snapshot):
         "selected_target",
         "selected_predictors",
         "comparison_html",
+        "detail_metric_comparison_html",
         "comparison_download",
         "output",
     ]:
         tab[key] = deepcopy(snapshot.get(key))
     restore_download_artifacts(tab, snapshot)
     tab["report_download"] = pro_report_download(tab["form_name"])
+    tab["report_pdf_download"] = pro_report_pdf_download(tab["form_name"])
 
 
 def restore_pro_runs(model_tabs, exclude=None):
@@ -3479,13 +3649,21 @@ def handle_regression_comparison_submission(tab, dataset):
         )
         tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
+            row["_is_best"] = row["_model_name"] == best_model_name
+            row["_is_detail"] = row["_model_name"] == detail_model_name
             row["Status"] = comparison_row_status(row["_model_name"], best_model_name, detail_model_name)
+        tab["detail_metric_comparison_html"] = detail_metric_comparison_html(
+            tab,
+            rows,
+            detail_model_name,
+            ["Metric", "Default", "Tuned"],
+        )
     else:
         tab["error"] = "No selected model could be fit."
+        tab["detail_metric_comparison_html"] = None
 
-    table_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
     tab["comparison_html"], comparison = comparison_html(
-        table_rows,
+        rows,
         ["Model", "Test R squared", "Default RMSE", "Default CV RMSE", "Tuned RMSE", "Tuned CV RMSE", "Test MAE", "CV R squared", "Best params", "Status"],
     )
     tab["comparison_download"] = register_comparison_download(tab, comparison)
@@ -3648,12 +3826,12 @@ def report_model_labels(tab_name, models):
     return ", ".join(model_label_for_run(tab, model) for model in models)
 
 
-def report_metadata_table(tab_name, snapshot, dataset):
+def report_metadata_rows(tab_name, snapshot, dataset):
     data = dataset.get("data") if dataset else None
     history_entry = snapshot.get("history_entry") or {}
     detail_model = snapshot.get("selected_model") or snapshot.get("selected_detail_model") or "-"
     cv_folds = snapshot.get("selected_cv_folds")
-    rows = [
+    return [
         {"Field": "Generated", "Value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
         {"Field": "Run time", "Value": history_entry.get("timestamp", "-")},
         {"Field": "Report type", "Value": "Pro classification" if tab_name == "pro_classification" else "Pro regression"},
@@ -3674,6 +3852,10 @@ def report_metadata_table(tab_name, snapshot, dataset):
         {"Field": "Hyperparameter tuning", "Value": {"off": "Off", "grid": "Grid search", "random": "Random search"}.get(snapshot.get("selected_tuning_mode", "off"), "Off")},
         {"Field": "Random search iterations", "Value": snapshot.get("selected_tuning_iterations", 10)},
     ]
+
+
+def report_metadata_table(tab_name, snapshot, dataset):
+    rows = report_metadata_rows(tab_name, snapshot, dataset)
     return pd.DataFrame(rows).to_html(index=False, border=0, classes="report-table")
 
 
@@ -3766,6 +3948,152 @@ def pro_report_html(tab_name, snapshot, dataset):
     return "".join(sections)
 
 
+def csv_report_frame(csv_data):
+    if not csv_data:
+        return None
+    try:
+        return pd.read_csv(StringIO(csv_data))
+    except Exception:
+        return pd.DataFrame({"Value": [csv_data]})
+
+
+def output_metrics_frame(output):
+    metrics = output.get("metrics") or []
+    if not metrics:
+        return None
+    return pd.DataFrame([{"Metric": item.get("label", ""), "Value": item.get("value", "")} for item in metrics])
+
+
+def html_table_frame(html_table):
+    if not html_table:
+        return None
+    try:
+        tables = pd.read_html(StringIO(html_table))
+    except (ImportError, ValueError):
+        return None
+    return tables[0] if tables else None
+
+
+def wrap_pdf_value(value, width=28):
+    text = "" if pd.isna(value) else str(value)
+    return "\n".join(textwrap.wrap(text, width=width, break_long_words=False)) or text
+
+
+def add_pdf_text_page(pdf, title, lines):
+    fig, ax = plt.subplots(figsize=(11, 8.5))
+    ax.axis("off")
+    ax.text(0.04, 0.94, title, fontsize=20, weight="bold", va="top")
+    y = 0.84
+    for line in lines:
+        wrapped = textwrap.wrap(str(line), width=105) or [""]
+        for part in wrapped:
+            ax.text(0.05, y, part, fontsize=10.5, va="top")
+            y -= 0.04
+            if y < 0.08:
+                pdf.savefig(fig, bbox_inches="tight")
+                plt.close(fig)
+                fig, ax = plt.subplots(figsize=(11, 8.5))
+                ax.axis("off")
+                y = 0.94
+    pdf.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+
+
+def add_pdf_table_pages(pdf, title, frame, rows_per_page=24):
+    if frame is None or frame.empty:
+        return
+
+    frame = frame.copy().fillna("")
+    for start in range(0, len(frame), rows_per_page):
+        chunk = frame.iloc[start : start + rows_per_page].copy()
+        for column in chunk.columns:
+            chunk[column] = chunk[column].map(lambda value: wrap_pdf_value(value, width=24))
+
+        fig, ax = plt.subplots(figsize=(11, 8.5))
+        ax.axis("off")
+        suffix = f" ({start + 1}-{start + len(chunk)} of {len(frame)})" if len(frame) > rows_per_page else ""
+        ax.text(0.02, 0.97, f"{title}{suffix}", fontsize=16, weight="bold", va="top")
+        table = ax.table(
+            cellText=chunk.values,
+            colLabels=list(chunk.columns),
+            cellLoc="left",
+            loc="center",
+            bbox=[0.02, 0.05, 0.96, 0.84],
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(7.0 if len(chunk.columns) > 6 else 8.2)
+        table.scale(1, 1.25)
+        for (row, _), cell in table.get_celld().items():
+            if row == 0:
+                cell.set_facecolor("#f1f5f9")
+                cell.set_text_props(weight="bold")
+            cell.set_edgecolor("#d8dee8")
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+
+def add_pdf_image_page(pdf, title, image_data):
+    if not image_data:
+        return
+    try:
+        image = plt.imread(BytesIO(base64.b64decode(image_data)), format="png")
+    except Exception:
+        return
+
+    fig, ax = plt.subplots(figsize=(11, 8.5))
+    ax.axis("off")
+    ax.text(0.02, 0.97, title, fontsize=16, weight="bold", va="top")
+    ax.imshow(image, extent=[0.08, 0.92, 0.08, 0.88], aspect="auto")
+    pdf.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+
+
+def pro_report_pdf_bytes(tab_name, snapshot, dataset):
+    output = snapshot.get("output") or {}
+    artifacts = snapshot.get("download_artifacts") or {}
+    report_title = "Pro Classification Report" if tab_name == "pro_classification" else "Pro Regression Report"
+    buffer = BytesIO()
+
+    with PdfPages(buffer) as pdf:
+        history_entry = snapshot.get("history_entry") or {}
+        add_pdf_text_page(
+            pdf,
+            report_title,
+            [
+                "Single-run export for the selected Pro model comparison.",
+                f"Dataset: {(dataset or {}).get('filename', '-')}",
+                f"Target: {snapshot.get('selected_target') or '-'}",
+                f"Detail model: {history_entry.get('detail_model', '-')}",
+                f"Summary: {history_entry.get('summary', '-')}",
+            ],
+        )
+        add_pdf_table_pages(pdf, "Dataset Metadata", pd.DataFrame(report_metadata_rows(tab_name, snapshot, dataset)), rows_per_page=22)
+        add_pdf_table_pages(pdf, "Model Comparison", csv_report_frame(artifacts.get("model_comparison")), rows_per_page=18)
+        add_pdf_table_pages(pdf, "Selected Detail Metrics", output_metrics_frame(output), rows_per_page=24)
+
+        details_frame_pdf = csv_report_frame(artifacts.get("details"))
+        if details_frame_pdf is None:
+            details_frame_pdf = html_table_frame(output.get("details_html"))
+        add_pdf_table_pages(pdf, "Model Details", details_frame_pdf, rows_per_page=24)
+        add_pdf_table_pages(pdf, "Coefficients", csv_report_frame(artifacts.get("coefficients")), rows_per_page=24)
+        add_pdf_table_pages(pdf, "Variable Importance", csv_report_frame(artifacts.get("variable_importance")), rows_per_page=24)
+        add_pdf_table_pages(pdf, "Confusion Matrix", csv_report_frame(artifacts.get("confusion_matrix")), rows_per_page=24)
+
+        if tab_name == "pro_classification":
+            add_pdf_image_page(pdf, "ROC Curve", output.get("roc_plot"))
+            add_pdf_image_page(pdf, "Precision-Recall Curve", output.get("pr_plot"))
+            add_pdf_image_page(pdf, "Classification Tree", output.get("tree_plot"))
+            add_pdf_table_pages(pdf, "Threshold Analysis", csv_report_frame(artifacts.get("threshold_analysis")), rows_per_page=24)
+        else:
+            add_pdf_image_page(pdf, "Predicted vs Actual", output.get("predicted_actual_plot"))
+            add_pdf_image_page(pdf, "Residuals vs Fitted", output.get("residuals_fitted_plot"))
+            add_pdf_image_page(pdf, "Residual Distribution", output.get("residual_distribution_plot"))
+            add_pdf_table_pages(pdf, "Residual Diagnostics", csv_report_frame(artifacts.get("residual_diagnostics")), rows_per_page=28)
+
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def durable_pro_report(result_type):
     if result_type not in PRO_TAB_NAMES:
         return None
@@ -3773,6 +4101,16 @@ def durable_pro_report(result_type):
     if not snapshot:
         return None
     return pro_report_html(result_type, snapshot, current_dataset())
+
+
+def durable_pro_report_pdf(result_type):
+    if result_type not in PRO_TAB_NAMES:
+        return None
+    snapshot = latest_pro_run_snapshot(result_type)
+    if not snapshot:
+        return None
+    return pro_report_pdf_bytes(result_type, snapshot, current_dataset())
+
 
 def durable_download_artifact(result_type, artifact):
     user_id, current_id = current_pro_run_scope()
@@ -3815,6 +4153,17 @@ def download_result(result_type, artifact):
         return Response(
             report_html,
             mimetype="text/html",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    if artifact == "pro_report_pdf":
+        report_pdf = durable_pro_report_pdf(result_type)
+        if report_pdf is None:
+            return Response("No Pro report PDF is available for this selection.", status=404, mimetype="text/plain")
+        filename = f"{result_type}_report.pdf"
+        return Response(
+            report_pdf,
+            mimetype="application/pdf",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
 
