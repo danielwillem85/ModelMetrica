@@ -2,6 +2,7 @@ from io import BytesIO, StringIO
 import base64
 from copy import deepcopy
 from datetime import datetime
+import json
 import math
 import sqlite3
 from pathlib import Path
@@ -39,7 +40,6 @@ ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx"}
 DB_PATH = Path(__file__).with_name("modelmetrica_users.sqlite3")
 DATASETS = {}
 DOWNLOADS = {}
-PRO_RUNS = {}
 
 PAGE_TEMPLATE = """
 {% macro render_classification_tab(tab, active_tab, has_data, columns) %}
@@ -833,6 +833,35 @@ def init_auth_db():
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS datasets (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                filename TEXT NOT NULL,
+                csv_data TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pro_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                dataset_id TEXT NOT NULL,
+                tab_name TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (dataset_id) REFERENCES datasets(id)
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pro_runs_lookup ON pro_runs (user_id, dataset_id, tab_name, id DESC)"
+        )
 
 
 def find_user(username):
@@ -913,17 +942,47 @@ def simulate_test_data(row_count=1000):
     )
 
 
-def current_dataset():
-    dataset_id = session.get("dataset_id")
-    if not dataset_id:
+def current_user_id():
+    return session.get("user_id")
+
+
+def load_dataset_from_db(current_id):
+    user_id = current_user_id()
+    if not user_id:
         return None
-    return DATASETS.get(dataset_id)
+
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT filename, csv_data FROM datasets WHERE id = ? AND user_id = ?",
+            (current_id, user_id),
+        ).fetchone()
+    if row is None:
+        return None
+
+    dataset = {"data": pd.read_csv(StringIO(row["csv_data"])), "filename": row["filename"]}
+    DATASETS[current_id] = dataset
+    return dataset
+
+
+def current_dataset():
+    current_id = session.get("dataset_id")
+    if not current_id:
+        return None
+    return DATASETS.get(current_id) or load_dataset_from_db(current_id)
 
 
 def save_dataset(data, filename):
-    dataset_id = str(uuid4())
-    DATASETS[dataset_id] = {"data": data, "filename": filename}
-    session["dataset_id"] = dataset_id
+    current_id = str(uuid4())
+    DATASETS[current_id] = {"data": data, "filename": filename}
+    session["dataset_id"] = current_id
+
+    user_id = current_user_id()
+    if user_id:
+        with get_db_connection() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO datasets (id, user_id, filename, csv_data) VALUES (?, ?, ?, ?)",
+                (current_id, user_id, filename, data.to_csv(index=False)),
+            )
 
 
 def preview_table(data):
@@ -2481,26 +2540,82 @@ def run_history_entry(tab):
     }
 
 
-def pro_runs_for_current_dataset():
+def pro_run_json_default(value):
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
+def current_pro_run_scope():
+    user_id = current_user_id()
+    current_id = dataset_id()
+    if not user_id or not current_id:
+        return None, None
+    return user_id, current_id
+
+
+def tab_download_artifacts(tab):
     current_id = dataset_id()
     if not current_id:
-        return None
-    return PRO_RUNS.setdefault(current_id, {})
+        return {}
+    return deepcopy(DOWNLOADS.get(current_id, {}).get(tab["form_name"], {}))
+
+
+def load_pro_runs_from_db(tab_name):
+    user_id, current_id = current_pro_run_scope()
+    if not user_id or not current_id:
+        return []
+
+    runs = []
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT snapshot_json
+            FROM pro_runs
+            WHERE user_id = ? AND dataset_id = ? AND tab_name = ?
+            ORDER BY id DESC
+            LIMIT 5
+            """,
+            (user_id, current_id, tab_name),
+        ).fetchall()
+    for row in rows:
+        try:
+            runs.append(json.loads(row["snapshot_json"]))
+        except json.JSONDecodeError:
+            continue
+    return runs
 
 
 def update_run_history(tab, runs):
-    tab["run_history"] = [run["history_entry"] for run in runs]
+    tab["run_history"] = [run["history_entry"] for run in runs if run.get("history_entry")]
+
+
+def prune_old_pro_runs(connection, user_id, current_id, tab_name):
+    old_rows = connection.execute(
+        """
+        SELECT id
+        FROM pro_runs
+        WHERE user_id = ? AND dataset_id = ? AND tab_name = ?
+        ORDER BY id DESC
+        LIMIT -1 OFFSET 5
+        """,
+        (user_id, current_id, tab_name),
+    ).fetchall()
+    if old_rows:
+        connection.executemany("DELETE FROM pro_runs WHERE id = ?", [(row["id"],) for row in old_rows])
 
 
 def save_pro_run(tab):
     if tab["form_name"] not in PRO_TAB_NAMES or tab.get("output") is None:
         return
 
-    dataset_runs = pro_runs_for_current_dataset()
-    if dataset_runs is None:
+    user_id, current_id = current_pro_run_scope()
+    if not user_id or not current_id:
         return
 
-    runs = dataset_runs.setdefault(tab["form_name"], [])
     snapshot = {
         "selected_model": tab.get("selected_model"),
         "selected_models": list(tab.get("selected_models", [])),
@@ -2512,11 +2627,26 @@ def save_pro_run(tab):
         "comparison_html": tab.get("comparison_html"),
         "comparison_download": deepcopy(tab.get("comparison_download")),
         "output": deepcopy(tab.get("output")),
+        "download_artifacts": tab_download_artifacts(tab),
         "history_entry": run_history_entry(tab),
     }
-    runs.insert(0, snapshot)
-    del runs[5:]
-    update_run_history(tab, runs)
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO pro_runs (user_id, dataset_id, tab_name, snapshot_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, current_id, tab["form_name"], json.dumps(snapshot, default=pro_run_json_default)),
+        )
+        prune_old_pro_runs(connection, user_id, current_id, tab["form_name"])
+    update_run_history(tab, load_pro_runs_from_db(tab["form_name"]))
+
+
+def restore_download_artifacts(tab, snapshot):
+    current_id = dataset_id()
+    downloads = snapshot.get("download_artifacts") or {}
+    if current_id and downloads:
+        DOWNLOADS.setdefault(current_id, {})[tab["form_name"]] = deepcopy(downloads)
 
 
 def restore_pro_run(tab, snapshot):
@@ -2533,16 +2663,13 @@ def restore_pro_run(tab, snapshot):
         "output",
     ]:
         tab[key] = deepcopy(snapshot.get(key))
+    restore_download_artifacts(tab, snapshot)
 
 
 def restore_pro_runs(model_tabs, exclude=None):
-    dataset_runs = pro_runs_for_current_dataset()
-    if dataset_runs is None:
-        return
-
     exclude = exclude or set()
     for tab_name in PRO_TAB_NAMES:
-        runs = dataset_runs.get(tab_name, [])
+        runs = load_pro_runs_from_db(tab_name)
         tab = model_tabs[tab_name]
         if tab_name not in exclude and runs:
             restore_pro_run(tab, runs[0])
@@ -2794,6 +2921,34 @@ def logout():
     return redirect(url_for("index"))
 
 
+def durable_download_artifact(result_type, artifact):
+    user_id, current_id = current_pro_run_scope()
+    if not user_id or not current_id or result_type not in PRO_TAB_NAMES:
+        return None
+
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT snapshot_json
+            FROM pro_runs
+            WHERE user_id = ? AND dataset_id = ? AND tab_name = ?
+            ORDER BY id DESC
+            LIMIT 5
+            """,
+            (user_id, current_id, result_type),
+        ).fetchall()
+    for row in rows:
+        try:
+            snapshot = json.loads(row["snapshot_json"])
+        except json.JSONDecodeError:
+            continue
+        csv_data = (snapshot.get("download_artifacts") or {}).get(artifact)
+        if csv_data is not None:
+            DOWNLOADS.setdefault(current_id, {}).setdefault(result_type, {})[artifact] = csv_data
+            return csv_data
+    return None
+
+
 @app.route("/download/<result_type>/<artifact>")
 def download_result(result_type, artifact):
     if not is_user_authenticated():
@@ -2801,6 +2956,8 @@ def download_result(result_type, artifact):
 
     current_id = dataset_id()
     csv_data = DOWNLOADS.get(current_id, {}).get(result_type, {}).get(artifact)
+    if csv_data is None:
+        csv_data = durable_download_artifact(result_type, artifact)
     if csv_data is None:
         return Response("No downloadable result is available for this selection.", status=404, mimetype="text/plain")
 
@@ -2814,3 +2971,4 @@ def download_result(result_type, artifact):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
