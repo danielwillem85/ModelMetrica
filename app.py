@@ -22,9 +22,10 @@ from sklearn.ensemble import (
     RandomForestClassifier,
     RandomForestRegressor,
 )
+from sklearn.inspection import permutation_importance
 from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score, average_precision_score, auc, precision_recall_curve, roc_curve
-from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score, train_test_split
+from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -147,6 +148,18 @@ PAGE_TEMPLATE = """
                   <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
                   <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
                 </select>
+              </div>
+              <div>
+                <label for="{{ tab.tuning_mode_field }}">Hyperparameter tuning</label>
+                <select id="{{ tab.tuning_mode_field }}" name="{{ tab.tuning_mode_field }}" required>
+                  <option value="off" {{ 'selected' if tab.selected_tuning_mode == 'off' else '' }}>Off</option>
+                  <option value="grid" {{ 'selected' if tab.selected_tuning_mode == 'grid' else '' }}>Grid search</option>
+                  <option value="random" {{ 'selected' if tab.selected_tuning_mode == 'random' else '' }}>Random search</option>
+                </select>
+              </div>
+              <div>
+                <label for="{{ tab.tuning_iterations_field }}">Random search iterations</label>
+                <input id="{{ tab.tuning_iterations_field }}" name="{{ tab.tuning_iterations_field }}" type="number" min="3" max="30" step="1" value="{{ tab.selected_tuning_iterations }}" required>
               </div>
               {% endif %}
               <div>
@@ -378,6 +391,18 @@ PAGE_TEMPLATE = """
                   <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
                   <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
                 </select>
+              </div>
+              <div>
+                <label for="{{ tab.tuning_mode_field }}">Hyperparameter tuning</label>
+                <select id="{{ tab.tuning_mode_field }}" name="{{ tab.tuning_mode_field }}" required>
+                  <option value="off" {{ 'selected' if tab.selected_tuning_mode == 'off' else '' }}>Off</option>
+                  <option value="grid" {{ 'selected' if tab.selected_tuning_mode == 'grid' else '' }}>Grid search</option>
+                  <option value="random" {{ 'selected' if tab.selected_tuning_mode == 'random' else '' }}>Random search</option>
+                </select>
+              </div>
+              <div>
+                <label for="{{ tab.tuning_iterations_field }}">Random search iterations</label>
+                <input id="{{ tab.tuning_iterations_field }}" name="{{ tab.tuning_iterations_field }}" type="number" min="3" max="30" step="1" value="{{ tab.selected_tuning_iterations }}" required>
               </div>
               {% endif %}
               <div>
@@ -1093,7 +1118,27 @@ def preprocessing_options(tab):
         "scaling": tab.get("selected_scaling", "on"),
         "split_seed": tab.get("selected_split_seed", 42),
         "outlier_handling": tab.get("selected_outlier_handling", "none"),
+        "tuned_params": tab.get("tuned_params", {}),
     }
+
+
+def tuned_param(options, model_name, param_name, default=None):
+    params = (options or {}).get("tuned_params", {}).get(model_name, {})
+    return params.get(param_name, default)
+
+
+def tuned_float(options, model_name, param_name, default):
+    try:
+        return float(tuned_param(options, model_name, param_name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def tuned_int(options, model_name, param_name, default):
+    try:
+        return int(tuned_param(options, model_name, param_name, default))
+    except (TypeError, ValueError):
+        return default
 
 
 def preprocessing_seed(options):
@@ -1225,6 +1270,8 @@ def add_preprocessing_details(details, options):
     if options is None:
         return details
     details.update(preprocessing_details(options))
+    if options.get("detail_tuned_params_label"):
+        details["Tuned detail params"] = options["detail_tuned_params_label"]
     return details
 
 def prepare_classification_data(data, target, predictors, binary_only, options=None):
@@ -1282,6 +1329,13 @@ def parse_split_seed(value):
         return 42
     return min(max(seed, 0), 999999)
 
+def parse_tuning_iterations(value):
+    try:
+        iterations = int(value)
+    except (TypeError, ValueError):
+        return 10
+    return min(max(iterations, 3), 30)
+
 def dataset_id():
     return session.get("dataset_id")
 
@@ -1319,17 +1373,48 @@ def register_downloads(result_type, result):
 
 def classification_estimator(model_name, options=None):
     if model_name == "logistic":
-        return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=preprocessing_seed(options))) if scaling_enabled(options) else LogisticRegression(max_iter=1000, random_state=preprocessing_seed(options))
+        model = LogisticRegression(
+            C=tuned_float(options, "logistic", "C", 1.0),
+            max_iter=1000,
+            random_state=preprocessing_seed(options),
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     if model_name == "tree":
-        return DecisionTreeClassifier(max_depth=4, random_state=preprocessing_seed(options))
+        return DecisionTreeClassifier(
+            max_depth=tuned_param(options, "tree", "max_depth", 4),
+            min_samples_leaf=tuned_int(options, "tree", "min_samples_leaf", 1),
+            random_state=preprocessing_seed(options),
+        )
     if model_name == "random_forest":
-        return RandomForestClassifier(n_estimators=200, random_state=preprocessing_seed(options), n_jobs=-1)
+        return RandomForestClassifier(
+            n_estimators=tuned_int(options, "random_forest", "n_estimators", 200),
+            max_depth=tuned_param(options, "random_forest", "max_depth", None),
+            min_samples_leaf=tuned_int(options, "random_forest", "min_samples_leaf", 1),
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+        )
     if model_name == "gradient_boosting":
-        return GradientBoostingClassifier(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=preprocessing_seed(options))
+        return GradientBoostingClassifier(
+            n_estimators=tuned_int(options, "gradient_boosting", "n_estimators", 100),
+            learning_rate=tuned_float(options, "gradient_boosting", "learning_rate", 0.1),
+            max_depth=tuned_int(options, "gradient_boosting", "max_depth", 3),
+            random_state=preprocessing_seed(options),
+        )
     if model_name == "svm":
-        return make_pipeline(StandardScaler(), SVC(kernel="rbf", C=1.0, gamma="scale", probability=True, random_state=preprocessing_seed(options))) if scaling_enabled(options) else SVC(kernel="rbf", C=1.0, gamma="scale", probability=True, random_state=preprocessing_seed(options))
+        model = SVC(
+            kernel="rbf",
+            C=tuned_float(options, "svm", "C", 1.0),
+            gamma=tuned_param(options, "svm", "gamma", "scale"),
+            probability=True,
+            random_state=preprocessing_seed(options),
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     if model_name == "knn":
-        return make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=5, weights="distance")) if scaling_enabled(options) else KNeighborsClassifier(n_neighbors=5, weights="distance")
+        model = KNeighborsClassifier(
+            n_neighbors=tuned_int(options, "knn", "n_neighbors", 5),
+            weights=tuned_param(options, "knn", "weights", "distance"),
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     raise ValueError("Unknown classification model.")
 
 
@@ -1337,17 +1422,44 @@ def regression_estimator(model_name, options=None):
     if model_name == "linear":
         return LinearRegression()
     if model_name == "ridge":
-        return make_pipeline(StandardScaler(), Ridge(alpha=1.0)) if scaling_enabled(options) else Ridge(alpha=1.0)
+        model = Ridge(alpha=tuned_float(options, "ridge", "alpha", 1.0))
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     if model_name == "lasso":
-        return make_pipeline(StandardScaler(), Lasso(alpha=0.1, max_iter=10000, random_state=preprocessing_seed(options))) if scaling_enabled(options) else Lasso(alpha=0.1, max_iter=10000, random_state=preprocessing_seed(options))
+        model = Lasso(
+            alpha=tuned_float(options, "lasso", "alpha", 0.1),
+            max_iter=10000,
+            random_state=preprocessing_seed(options),
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     if model_name == "random_forest":
-        return RandomForestRegressor(n_estimators=200, random_state=preprocessing_seed(options), n_jobs=-1)
+        return RandomForestRegressor(
+            n_estimators=tuned_int(options, "random_forest", "n_estimators", 200),
+            max_depth=tuned_param(options, "random_forest", "max_depth", None),
+            min_samples_leaf=tuned_int(options, "random_forest", "min_samples_leaf", 1),
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+        )
     if model_name == "gradient_boosting":
-        return GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=preprocessing_seed(options))
+        return GradientBoostingRegressor(
+            n_estimators=tuned_int(options, "gradient_boosting", "n_estimators", 100),
+            learning_rate=tuned_float(options, "gradient_boosting", "learning_rate", 0.1),
+            max_depth=tuned_int(options, "gradient_boosting", "max_depth", 3),
+            random_state=preprocessing_seed(options),
+        )
     if model_name == "svr":
-        return make_pipeline(StandardScaler(), SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale")) if scaling_enabled(options) else SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale")
+        model = SVR(
+            kernel="rbf",
+            C=tuned_float(options, "svr", "C", 1.0),
+            epsilon=tuned_float(options, "svr", "epsilon", 0.1),
+            gamma=tuned_param(options, "svr", "gamma", "scale"),
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     if model_name == "knn":
-        return make_pipeline(StandardScaler(), KNeighborsRegressor(n_neighbors=5, weights="distance")) if scaling_enabled(options) else KNeighborsRegressor(n_neighbors=5, weights="distance")
+        model = KNeighborsRegressor(
+            n_neighbors=tuned_int(options, "knn", "n_neighbors", 5),
+            weights=tuned_param(options, "knn", "weights", "distance"),
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     raise ValueError("Unknown regression model.")
 
 
@@ -1440,7 +1552,7 @@ def details_table(details):
     return details_frame(details).to_html(index=False, border=0, classes="model-details")
 
 
-def importance_table(feature_names, importances):
+def importance_frame(feature_names, importances):
     importances = pd.DataFrame(
         {
             "Predictor": feature_names,
@@ -1451,6 +1563,37 @@ def importance_table(feature_names, importances):
     importances = importances[importances["Importance"] > 0]
     if importances.empty:
         importances = pd.DataFrame({"Predictor": ["None"], "Importance": [0.0]})
+    return importances
+
+
+def importance_table(feature_names, importances):
+    return importance_frame(feature_names, importances).to_html(index=False, border=0, classes="importances", float_format="{:.4f}".format)
+
+
+def permutation_importance_frame(model, x_test, y_test, feature_names, scoring, options):
+    result = permutation_importance(
+        model,
+        x_test,
+        y_test,
+        n_repeats=5,
+        random_state=preprocessing_seed(options),
+        scoring=scoring,
+    )
+    importances = pd.DataFrame(
+        {
+            "Predictor": feature_names,
+            "Importance": result.importances_mean,
+            "Importance SD": result.importances_std,
+        }
+    )
+    importances = importances.sort_values("Importance", ascending=False)
+    importances = importances[importances["Importance"] > 0]
+    if importances.empty:
+        importances = pd.DataFrame({"Predictor": ["None"], "Importance": [0.0], "Importance SD": [0.0]})
+    return importances
+
+
+def permutation_importance_html(importances):
     return importances.to_html(index=False, border=0, classes="importances", float_format="{:.4f}".format)
 
 
@@ -1484,7 +1627,8 @@ def fit_logistic_regression(data, target, predictors, test_size, cv_folds, optio
     x_matrix = np.column_stack([np.ones(len(split["x_train"])), split["x_train"].to_numpy(dtype=float)])
     feature_names = ["Intercept"] + list(x_encoded.columns)
     beta = np.zeros(x_matrix.shape[1])
-    ridge = 1e-8
+    c_value = tuned_param(options, "logistic", "C")
+    ridge = 1 / max(float(c_value), 1e-8) if c_value is not None else 1e-8
 
     for _ in range(100):
         probabilities = np.clip(sigmoid(x_matrix @ beta), 1e-8, 1 - 1e-8)
@@ -1543,6 +1687,7 @@ def fit_logistic_regression(data, target, predictors, test_size, cv_folds, optio
     metrics = append_classification_cv(metrics, "logistic", x_encoded, target_values, cv_folds, options)
     details = {
         "Model": "Logistic regression",
+        "C": c_value if c_value is not None else "Default",
         "Decision threshold": "0.5",
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
@@ -1572,10 +1717,10 @@ def fit_tree_model(data, target, predictors, test_size, cv_folds, options=None):
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
-    min_samples_leaf = max(1, int(len(split["y_train"]) * 0.02))
+    min_samples_leaf = tuned_int(options, "tree", "min_samples_leaf", max(1, int(len(split["y_train"]) * 0.02)))
 
     tree = DecisionTreeClassifier(
-        max_depth=4,
+        max_depth=tuned_param(options, "tree", "max_depth", 4),
         min_samples_leaf=min_samples_leaf,
         random_state=preprocessing_seed(options),
     )
@@ -1629,9 +1774,10 @@ def fit_random_forest_model(data, target, predictors, test_size, cv_folds, optio
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
-    min_samples_leaf = max(1, int(len(split["y_train"]) * 0.01))
+    min_samples_leaf = tuned_int(options, "random_forest", "min_samples_leaf", max(1, int(len(split["y_train"]) * 0.01)))
     model = RandomForestClassifier(
-        n_estimators=200,
+        n_estimators=tuned_int(options, "random_forest", "n_estimators", 200),
+        max_depth=tuned_param(options, "random_forest", "max_depth", None),
         min_samples_leaf=min_samples_leaf,
         random_state=preprocessing_seed(options),
         n_jobs=-1,
@@ -1652,6 +1798,7 @@ def fit_random_forest_model(data, target, predictors, test_size, cv_folds, optio
     details = {
         "Model": "RandomForestClassifier",
         "Trees": model.n_estimators,
+        "Maximum depth": model.max_depth if model.max_depth is not None else "None",
         "Minimum samples per leaf": min_samples_leaf,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
@@ -1683,9 +1830,9 @@ def fit_gradient_boosting_model(data, target, predictors, test_size, cv_folds, o
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
     model = GradientBoostingClassifier(
-        n_estimators=100,
-        learning_rate=0.1,
-        max_depth=3,
+        n_estimators=tuned_int(options, "gradient_boosting", "n_estimators", 100),
+        learning_rate=tuned_float(options, "gradient_boosting", "learning_rate", 0.1),
+        max_depth=tuned_int(options, "gradient_boosting", "max_depth", 3),
         random_state=preprocessing_seed(options),
     )
     model.fit(split["x_train"], split["y_train"])
@@ -1736,11 +1883,17 @@ def fit_svm_model(data, target, predictors, test_size, cv_folds, options=None):
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
     scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
-    model = SVC(kernel="rbf", C=1.0, gamma="scale", random_state=preprocessing_seed(options))
+    model = SVC(
+        kernel="rbf",
+        C=tuned_float(options, "svm", "C", 1.0),
+        gamma=tuned_param(options, "svm", "gamma", "scale"),
+        random_state=preprocessing_seed(options),
+    )
     model.fit(scaled_train, split["y_train"])
     predicted_labels = class_names[model.predict(scaled_test)]
     accuracy = accuracy_score(split["target_test"], predicted_labels)
     confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
+    importances = permutation_importance_frame(model, scaled_test, split["y_test"], x_encoded.columns, "accuracy", options)
 
     metrics = [
         {"label": "Train rows", "value": len(split["x_train"])},
@@ -1756,6 +1909,7 @@ def fit_svm_model(data, target, predictors, test_size, cv_folds, options=None):
         "C": model.C,
         "Gamma": model.gamma,
         "Support vectors by class": ", ".join(str(value) for value in model.n_support_),
+        "Importance method": "Permutation importance on held-out test set",
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
     }
@@ -1767,11 +1921,12 @@ def fit_svm_model(data, target, predictors, test_size, cv_folds, options=None):
         "positive_class": None,
         "metrics": metrics,
         "coefficients_html": None,
-        "importances_html": None,
+        "importances_html": permutation_importance_html(importances),
         "details_html": details_table(add_preprocessing_details(details, options)),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
         "download_data": {
+            "variable_importance": importances.to_csv(index=False),
             "confusion_matrix": confusion.to_csv(),
             "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
@@ -1783,12 +1938,13 @@ def fit_knn_model(data, target, predictors, test_size, cv_folds, options=None):
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
     scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
-    neighbors = min(5, len(split["y_train"]))
-    model = KNeighborsClassifier(n_neighbors=neighbors, weights="distance")
+    neighbors = min(tuned_int(options, "knn", "n_neighbors", 5), len(split["y_train"]))
+    model = KNeighborsClassifier(n_neighbors=neighbors, weights=tuned_param(options, "knn", "weights", "distance"))
     model.fit(scaled_train, split["y_train"])
     predicted_labels = class_names[model.predict(scaled_test)]
     accuracy = accuracy_score(split["target_test"], predicted_labels)
     confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
+    importances = permutation_importance_frame(model, scaled_test, split["y_test"], x_encoded.columns, "accuracy", options)
 
     metrics = [
         {"label": "Train rows", "value": len(split["x_train"])},
@@ -1803,6 +1959,7 @@ def fit_knn_model(data, target, predictors, test_size, cv_folds, options=None):
         "Neighbors": neighbors,
         "Weights": model.weights,
         "Distance metric": model.metric,
+        "Importance method": "Permutation importance on held-out test set",
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
     }
@@ -1814,11 +1971,12 @@ def fit_knn_model(data, target, predictors, test_size, cv_folds, options=None):
         "positive_class": None,
         "metrics": metrics,
         "coefficients_html": None,
-        "importances_html": None,
+        "importances_html": permutation_importance_html(importances),
         "details_html": details_table(add_preprocessing_details(details, options)),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
         "tree_plot": None,
         "download_data": {
+            "variable_importance": importances.to_csv(index=False),
             "confusion_matrix": confusion.to_csv(),
             "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
@@ -1959,7 +2117,7 @@ def fit_ridge_regression(data, target, predictors, test_size, cv_folds, options=
     y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
     split = split_regression_data(y, x_encoded, test_size, options)
     scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
-    model = Ridge(alpha=1.0)
+    model = Ridge(alpha=tuned_float(options, "ridge", "alpha", 1.0))
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
 
@@ -1997,7 +2155,11 @@ def fit_lasso_regression(data, target, predictors, test_size, cv_folds, options=
     y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
     split = split_regression_data(y, x_encoded, test_size, options)
     scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
-    model = Lasso(alpha=0.1, max_iter=10000, random_state=preprocessing_seed(options))
+    model = Lasso(
+        alpha=tuned_float(options, "lasso", "alpha", 0.1),
+        max_iter=10000,
+        random_state=preprocessing_seed(options),
+    )
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
     nonzero_count = int(np.sum(np.abs(model.coef_) > 1e-8))
@@ -2036,9 +2198,10 @@ def fit_lasso_regression(data, target, predictors, test_size, cv_folds, options=
 def fit_random_forest_regression(data, target, predictors, test_size, cv_folds, options=None):
     y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
     split = split_regression_data(y, x_encoded, test_size, options)
-    min_samples_leaf = max(1, int(len(split["y_train"]) * 0.01))
+    min_samples_leaf = tuned_int(options, "random_forest", "min_samples_leaf", max(1, int(len(split["y_train"]) * 0.01)))
     model = RandomForestRegressor(
-        n_estimators=200,
+        n_estimators=tuned_int(options, "random_forest", "n_estimators", 200),
+        max_depth=tuned_param(options, "random_forest", "max_depth", None),
         min_samples_leaf=min_samples_leaf,
         random_state=preprocessing_seed(options),
         n_jobs=-1,
@@ -2054,6 +2217,7 @@ def fit_random_forest_regression(data, target, predictors, test_size, cv_folds, 
     details = {
         "Model": "RandomForestRegressor",
         "Trees": model.n_estimators,
+        "Maximum depth": model.max_depth if model.max_depth is not None else "None",
         "Minimum samples per leaf": min_samples_leaf,
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
@@ -2080,9 +2244,9 @@ def fit_gradient_boosting_regression(data, target, predictors, test_size, cv_fol
     y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
     split = split_regression_data(y, x_encoded, test_size, options)
     model = GradientBoostingRegressor(
-        n_estimators=100,
-        learning_rate=0.1,
-        max_depth=3,
+        n_estimators=tuned_int(options, "gradient_boosting", "n_estimators", 100),
+        learning_rate=tuned_float(options, "gradient_boosting", "learning_rate", 0.1),
+        max_depth=tuned_int(options, "gradient_boosting", "max_depth", 3),
         random_state=preprocessing_seed(options),
     )
     model.fit(split["x_train"], split["y_train"])
@@ -2123,9 +2287,15 @@ def fit_svr_regression(data, target, predictors, test_size, cv_folds, options=No
     y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
     split = split_regression_data(y, x_encoded, test_size, options)
     scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
-    model = SVR(kernel="rbf", C=1.0, epsilon=0.1, gamma="scale")
+    model = SVR(
+        kernel="rbf",
+        C=tuned_float(options, "svr", "C", 1.0),
+        epsilon=tuned_float(options, "svr", "epsilon", 0.1),
+        gamma=tuned_param(options, "svr", "gamma", "scale"),
+    )
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
+    importances = permutation_importance_frame(model, scaled_test, split["y_test"], x_encoded.columns, "neg_root_mean_squared_error", options)
 
     metrics = [
         {"label": "Train rows", "value": len(split["x_train"])},
@@ -2140,6 +2310,7 @@ def fit_svr_regression(data, target, predictors, test_size, cv_folds, options=No
         "Gamma": model.gamma,
         "Support vectors": len(model.support_),
         "Feature scaling": scaling_label,
+        "Importance method": "Permutation importance on held-out test set",
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
         "Random seed": preprocessing_seed(options),
@@ -2151,9 +2322,10 @@ def fit_svr_regression(data, target, predictors, test_size, cv_folds, options=No
         "target": target,
         "metrics": metrics,
         "coefficients_html": None,
-        "importances_html": None,
+        "importances_html": permutation_importance_html(importances),
         "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
+            "variable_importance": importances.to_csv(index=False),
             "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
@@ -2163,10 +2335,11 @@ def fit_knn_regression(data, target, predictors, test_size, cv_folds, options=No
     y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
     split = split_regression_data(y, x_encoded, test_size, options)
     scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
-    neighbors = min(5, len(split["y_train"]))
-    model = KNeighborsRegressor(n_neighbors=neighbors, weights="distance")
+    neighbors = min(tuned_int(options, "knn", "n_neighbors", 5), len(split["y_train"]))
+    model = KNeighborsRegressor(n_neighbors=neighbors, weights=tuned_param(options, "knn", "weights", "distance"))
     model.fit(scaled_train, split["y_train"])
     predictions = model.predict(scaled_test)
+    importances = permutation_importance_frame(model, scaled_test, split["y_test"], x_encoded.columns, "neg_root_mean_squared_error", options)
 
     metrics = [
         {"label": "Train rows", "value": len(split["x_train"])},
@@ -2179,6 +2352,7 @@ def fit_knn_regression(data, target, predictors, test_size, cv_folds, options=No
         "Weights": model.weights,
         "Distance metric": model.metric,
         "Feature scaling": scaling_label,
+        "Importance method": "Permutation importance on held-out test set",
         "Test set size": f"{test_size:.0%}",
         "CV folds requested": cv_folds if cv_folds else "Off",
         "Random seed": preprocessing_seed(options),
@@ -2190,9 +2364,10 @@ def fit_knn_regression(data, target, predictors, test_size, cv_folds, options=No
         "target": target,
         "metrics": metrics,
         "coefficients_html": None,
-        "importances_html": None,
+        "importances_html": permutation_importance_html(importances),
         "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
+            "variable_importance": importances.to_csv(index=False),
             "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
     }
@@ -2242,6 +2417,8 @@ CLASSIFICATION_TAB_CONFIGS = {
         "scaling_field": "pro_classification_scaling",
         "split_seed_field": "pro_classification_split_seed",
         "outlier_handling_field": "pro_classification_outlier_handling",
+        "tuning_mode_field": "pro_classification_tuning_mode",
+        "tuning_iterations_field": "pro_classification_tuning_iterations",
         "default_model": "logistic",
         "allow_model_comparison": True,
     },
@@ -2272,6 +2449,8 @@ REGRESSION_TAB_CONFIGS = {
         "scaling_field": "pro_regression_scaling",
         "split_seed_field": "pro_regression_split_seed",
         "outlier_handling_field": "pro_regression_outlier_handling",
+        "tuning_mode_field": "pro_regression_tuning_mode",
+        "tuning_iterations_field": "pro_regression_tuning_iterations",
         "default_model": "linear",
         "allow_model_comparison": True,
     },
@@ -2293,6 +2472,8 @@ def make_model_tab(config):
             "selected_scaling": "on",
             "selected_split_seed": 42,
             "selected_outlier_handling": "none",
+            "selected_tuning_mode": "off",
+            "selected_tuning_iterations": 10,
             "selected_target": None,
             "selected_predictors": [],
             "error": None,
@@ -2374,6 +2555,12 @@ def populate_tab_from_request(tab):
             {"none", "winsorize", "remove_iqr"},
             "none",
         )
+        tab["selected_tuning_mode"] = parse_choice(
+            request.form.get(tab["tuning_mode_field"]),
+            {"off", "grid", "random"},
+            "off",
+        )
+        tab["selected_tuning_iterations"] = parse_tuning_iterations(request.form.get(tab["tuning_iterations_field"]))
     tab["selected_target"] = request.form.get(tab["target_field"])
     tab["selected_predictors"] = request.form.getlist(tab["predictors_field"])
 
@@ -2386,6 +2573,141 @@ CLASSIFICATION_MODEL_LABELS = {
     "knn": "kNN",
 }
 
+
+def tuning_mode(tab):
+    return tab.get("selected_tuning_mode", "off")
+
+
+def tuning_enabled(tab):
+    return tuning_mode(tab) in {"grid", "random"}
+
+
+def tuning_iterations(tab):
+    return tab.get("selected_tuning_iterations", 10)
+
+
+def estimator_step_name(estimator, estimator_class):
+    if hasattr(estimator, "named_steps"):
+        for name, step in estimator.named_steps.items():
+            if isinstance(step, estimator_class):
+                return f"{name}__"
+    return ""
+
+
+def classification_tuning_grid(model_name, estimator):
+    if model_name == "logistic":
+        prefix = estimator_step_name(estimator, LogisticRegression)
+        return {f"{prefix}C": [0.1, 1.0, 10.0]}
+    if model_name == "tree":
+        return {"max_depth": [3, 4, 6, None], "min_samples_leaf": [1, 5, 10]}
+    if model_name == "random_forest":
+        return {"n_estimators": [100, 200], "max_depth": [None, 6, 10], "min_samples_leaf": [1, 5]}
+    if model_name == "gradient_boosting":
+        return {"n_estimators": [50, 100], "learning_rate": [0.05, 0.1, 0.2], "max_depth": [2, 3]}
+    if model_name == "svm":
+        prefix = estimator_step_name(estimator, SVC)
+        return {f"{prefix}C": [0.5, 1.0, 2.0], f"{prefix}gamma": ["scale", "auto"]}
+    if model_name == "knn":
+        prefix = estimator_step_name(estimator, KNeighborsClassifier)
+        return {f"{prefix}n_neighbors": [3, 5, 9], f"{prefix}weights": ["uniform", "distance"]}
+    return {}
+
+
+def regression_tuning_grid(model_name, estimator):
+    if model_name == "linear":
+        return {}
+    if model_name == "ridge":
+        prefix = estimator_step_name(estimator, Ridge)
+        return {f"{prefix}alpha": [0.1, 1.0, 10.0]}
+    if model_name == "lasso":
+        prefix = estimator_step_name(estimator, Lasso)
+        return {f"{prefix}alpha": [0.01, 0.1, 1.0]}
+    if model_name == "random_forest":
+        return {"n_estimators": [100, 200], "max_depth": [None, 6, 10], "min_samples_leaf": [1, 5]}
+    if model_name == "gradient_boosting":
+        return {"n_estimators": [50, 100], "learning_rate": [0.05, 0.1, 0.2], "max_depth": [2, 3]}
+    if model_name == "svr":
+        prefix = estimator_step_name(estimator, SVR)
+        return {f"{prefix}C": [0.5, 1.0, 2.0], f"{prefix}epsilon": [0.05, 0.1, 0.2], f"{prefix}gamma": ["scale", "auto"]}
+    if model_name == "knn":
+        prefix = estimator_step_name(estimator, KNeighborsRegressor)
+        return {f"{prefix}n_neighbors": [3, 5, 9], f"{prefix}weights": ["uniform", "distance"]}
+    return {}
+
+
+def search_cv_for_mode(estimator, param_grid, mode, iterations, scoring, cv, seed):
+    if mode == "grid":
+        return GridSearchCV(estimator, param_grid, cv=cv, scoring=scoring, n_jobs=-1)
+    return RandomizedSearchCV(
+        estimator,
+        param_grid,
+        n_iter=min(iterations, max(1, math.prod(len(values) for values in param_grid.values()))),
+        cv=cv,
+        scoring=scoring,
+        random_state=seed,
+        n_jobs=-1,
+    )
+
+
+def formatted_best_params(params):
+    if not params:
+        return "-"
+    cleaned = {key.split("__")[-1]: value for key, value in params.items()}
+    return ", ".join(f"{key}={value}" for key, value in cleaned.items())
+
+
+def normalized_search_params(params):
+    return {key.split("__")[-1]: value for key, value in params.items()}
+
+
+def tune_classification_model(model_name, data, target, predictors, test_size, cv_folds, options, mode, iterations):
+    _, target_values, _, x_encoded = prepare_classification_data(data, target, predictors, binary_only=(model_name == "logistic"), options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
+    min_class_count = int(pd.Series(split["y_train"]).value_counts().min())
+    actual_folds = min(cv_folds if cv_folds > 1 else 3, min_class_count)
+    if actual_folds < 2:
+        return {"error": "Not enough class balance"}
+
+    estimator = classification_estimator(model_name, options)
+    param_grid = classification_tuning_grid(model_name, estimator)
+    if not param_grid:
+        return {"error": "No tuning grid"}
+
+    cv = StratifiedKFold(n_splits=actual_folds, shuffle=True, random_state=preprocessing_seed(options))
+    search = search_cv_for_mode(estimator, param_grid, mode, iterations, "accuracy", cv, preprocessing_seed(options))
+    search.fit(split["x_train"], split["y_train"])
+    predictions = search.best_estimator_.predict(split["x_test"])
+    return {
+        "test_accuracy": float(accuracy_score(split["y_test"], predictions)),
+        "cv_accuracy": float(search.best_score_),
+        "params": formatted_best_params(search.best_params_),
+        "raw_params": normalized_search_params(search.best_params_),
+    }
+
+
+def tune_regression_model(model_name, data, target, predictors, test_size, cv_folds, options, mode, iterations):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    actual_folds = min(cv_folds if cv_folds > 1 else 3, len(split["y_train"]))
+    if actual_folds < 2:
+        return {"error": "Not enough rows"}
+
+    estimator = regression_estimator(model_name, options)
+    param_grid = regression_tuning_grid(model_name, estimator)
+    if not param_grid:
+        return {"error": "No tuning grid"}
+
+    cv = KFold(n_splits=actual_folds, shuffle=True, random_state=preprocessing_seed(options))
+    search = search_cv_for_mode(estimator, param_grid, mode, iterations, "neg_root_mean_squared_error", cv, preprocessing_seed(options))
+    search.fit(split["x_train"], split["y_train"])
+    predictions = search.best_estimator_.predict(split["x_test"])
+    rmse = math.sqrt(float(np.mean((split["y_test"] - predictions) ** 2)))
+    return {
+        "test_rmse": rmse,
+        "cv_rmse": float(-search.best_score_),
+        "params": formatted_best_params(search.best_params_),
+        "raw_params": normalized_search_params(search.best_params_),
+    }
 
 def metric_value(output, label):
     for metric in output.get("metrics", []):
@@ -2676,6 +2998,29 @@ def choose_detail_model(tab, successful_outputs, best_model_name):
     return best_model_name, output_by_model[best_model_name]
 
 
+def detail_options_with_tuning(options, model_name, tuned_results):
+    tuned = tuned_results.get(model_name)
+    if not tuned or tuned.get("error") or not tuned.get("raw_params"):
+        return options
+
+    tuned_options = deepcopy(options)
+    tuned_options.setdefault("tuned_params", {})[model_name] = tuned["raw_params"]
+    tuned_options["detail_tuned_params_label"] = tuned.get("params", "-")
+    return tuned_options
+
+
+def refit_tuned_detail_output(tab, dataset, model_name, options, fitter_map, default_fitter):
+    fit_model = fitter_map.get(model_name, default_fitter)
+    return fit_model(
+        dataset["data"],
+        tab["selected_target"],
+        tab["selected_predictors"],
+        tab["selected_test_size"],
+        tab["selected_cv_folds"],
+        options,
+    )
+
+
 def comparison_row_status(model_name, best_model_name, detail_model_name):
     labels = []
     if model_name == best_model_name:
@@ -2687,6 +3032,7 @@ def comparison_row_status(model_name, best_model_name, detail_model_name):
 def handle_classification_comparison_submission(tab, dataset):
     options = preprocessing_options(tab)
     successful_outputs = []
+    tuned_results = {}
     rows = []
 
     for model_name in tab["selected_models"]:
@@ -2704,29 +3050,51 @@ def handle_classification_comparison_submission(tab, dataset):
             accuracy = metric_float(output, "Test accuracy")
             cv_accuracy = metric_float(output, "CV accuracy mean")
             precision, recall, f1 = weighted_precision_recall_f1(output)
+            tuned = tune_classification_model(
+                model_name,
+                dataset["data"],
+                tab["selected_target"],
+                tab["selected_predictors"],
+                tab["selected_test_size"],
+                tab["selected_cv_folds"],
+                options,
+                tuning_mode(tab),
+                tuning_iterations(tab),
+            ) if tuning_enabled(tab) else None
+            if tuned:
+                tuned_results[model_name] = tuned
+            tuned_accuracy = tuned.get("test_accuracy") if tuned and not tuned.get("error") else None
+            tuned_cv_accuracy = tuned.get("cv_accuracy") if tuned and not tuned.get("error") else None
+            ranking_accuracy = tuned_accuracy if tuned_accuracy is not None else accuracy
             rows.append(
                 {
                     "Model": model_label,
-                    "Test accuracy": format_optional_metric(accuracy),
-                    "CV accuracy": format_optional_metric(cv_accuracy),
+                    "Default accuracy": format_optional_metric(accuracy),
+                    "Default CV accuracy": format_optional_metric(cv_accuracy),
+                    "Tuned accuracy": format_optional_metric(tuned_accuracy),
+                    "Tuned CV accuracy": format_optional_metric(tuned_cv_accuracy),
                     "Precision": format_optional_metric(precision),
                     "Recall": format_optional_metric(recall),
                     "F1": format_optional_metric(f1),
-                    "Status": "Fit",
-                    "_accuracy": accuracy if accuracy is not None else -1.0,
+                    "Best params": tuned.get("params", "-") if tuned else "-",
+                    "Status": tuned.get("error", "Fit") if tuned and tuned.get("error") else "Fit",
+                    "_accuracy": ranking_accuracy if ranking_accuracy is not None else -1.0,
                     "_model_name": model_name,
                 }
             )
-            successful_outputs.append((model_name, output, accuracy if accuracy is not None else -1.0))
+            successful_outputs.append((model_name, output, ranking_accuracy if ranking_accuracy is not None else -1.0))
         except Exception as exc:
             rows.append(
                 {
                     "Model": model_label,
-                    "Test accuracy": "-",
-                    "CV accuracy": "-",
+                    "Default accuracy": "-",
+                    "Default CV accuracy": "-",
+                    "Tuned accuracy": "-",
+                    "Tuned CV accuracy": "-",
                     "Precision": "-",
                     "Recall": "-",
                     "F1": "-",
+                    "Best params": "-",
                     "Status": str(exc),
                     "_accuracy": -1.0,
                     "_model_name": model_name,
@@ -2741,6 +3109,16 @@ def handle_classification_comparison_submission(tab, dataset):
     if successful_outputs:
         best_model_name, _, _ = max(successful_outputs, key=lambda item: item[2])
         detail_model_name, detail_output = choose_detail_model(tab, successful_outputs, best_model_name)
+        detail_options = detail_options_with_tuning(options, detail_model_name, tuned_results)
+        if detail_options is not options:
+            detail_output = refit_tuned_detail_output(
+                tab,
+                dataset,
+                detail_model_name,
+                detail_options,
+                CLASSIFICATION_MODEL_FITTERS,
+                fit_logistic_regression,
+            )
         tab["selected_model"] = detail_model_name
         tab["selected_models"] = [row["_model_name"] for row in rows]
         detail_output = add_binary_classification_analytics(
@@ -2750,7 +3128,7 @@ def handle_classification_comparison_submission(tab, dataset):
             tab["selected_predictors"],
             detail_model_name,
             tab["selected_test_size"],
-            options,
+            detail_options,
         )
         tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
@@ -2759,7 +3137,7 @@ def handle_classification_comparison_submission(tab, dataset):
         tab["error"] = "No selected model could be fit."
 
     table_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
-    tab["comparison_html"], comparison = comparison_html(table_rows, ["Model", "Test accuracy", "CV accuracy", "Precision", "Recall", "F1", "Status"])
+    tab["comparison_html"], comparison = comparison_html(table_rows, ["Model", "Default accuracy", "Default CV accuracy", "Tuned accuracy", "Tuned CV accuracy", "Precision", "Recall", "F1", "Best params", "Status"])
     tab["comparison_download"] = register_comparison_download(tab, comparison)
 
 PRO_TAB_NAMES = {"pro_classification", "pro_regression"}
@@ -2899,6 +3277,8 @@ def save_pro_run(tab):
         "selected_scaling": tab.get("selected_scaling"),
         "selected_split_seed": tab.get("selected_split_seed"),
         "selected_outlier_handling": tab.get("selected_outlier_handling"),
+        "selected_tuning_mode": tab.get("selected_tuning_mode"),
+        "selected_tuning_iterations": tab.get("selected_tuning_iterations"),
         "selected_target": tab.get("selected_target"),
         "selected_predictors": list(tab.get("selected_predictors", [])),
         "comparison_html": tab.get("comparison_html"),
@@ -2938,6 +3318,8 @@ def restore_pro_run(tab, snapshot):
         "selected_scaling",
         "selected_split_seed",
         "selected_outlier_handling",
+        "selected_tuning_mode",
+        "selected_tuning_iterations",
         "selected_target",
         "selected_predictors",
         "comparison_html",
@@ -2996,6 +3378,7 @@ REGRESSION_MODEL_LABELS = {
 def handle_regression_comparison_submission(tab, dataset):
     options = preprocessing_options(tab)
     successful_outputs = []
+    tuned_results = {}
     rows = []
 
     for model_name in tab["selected_models"]:
@@ -3015,29 +3398,51 @@ def handle_regression_comparison_submission(tab, dataset):
             mae = metric_float(output, "Test MAE")
             cv_r_squared = metric_float(output, "CV R squared mean")
             cv_rmse = metric_float(output, "CV RMSE mean")
+            tuned = tune_regression_model(
+                model_name,
+                dataset["data"],
+                tab["selected_target"],
+                tab["selected_predictors"],
+                tab["selected_test_size"],
+                tab["selected_cv_folds"],
+                options,
+                tuning_mode(tab),
+                tuning_iterations(tab),
+            ) if tuning_enabled(tab) else None
+            if tuned:
+                tuned_results[model_name] = tuned
+            tuned_rmse = tuned.get("test_rmse") if tuned and not tuned.get("error") else None
+            tuned_cv_rmse = tuned.get("cv_rmse") if tuned and not tuned.get("error") else None
+            ranking_rmse = tuned_rmse if tuned_rmse is not None else rmse
             rows.append(
                 {
                     "Model": model_label,
                     "Test R squared": format_optional_metric(r_squared),
-                    "Test RMSE": format_optional_metric(rmse),
+                    "Default RMSE": format_optional_metric(rmse),
+                    "Default CV RMSE": format_optional_metric(cv_rmse),
+                    "Tuned RMSE": format_optional_metric(tuned_rmse),
+                    "Tuned CV RMSE": format_optional_metric(tuned_cv_rmse),
                     "Test MAE": format_optional_metric(mae),
                     "CV R squared": format_optional_metric(cv_r_squared),
-                    "CV RMSE": format_optional_metric(cv_rmse),
-                    "Status": "Fit",
-                    "_rmse": rmse if rmse is not None else float("inf"),
+                    "Best params": tuned.get("params", "-") if tuned else "-",
+                    "Status": tuned.get("error", "Fit") if tuned and tuned.get("error") else "Fit",
+                    "_rmse": ranking_rmse if ranking_rmse is not None else float("inf"),
                     "_model_name": model_name,
                 }
             )
-            successful_outputs.append((model_name, output, rmse if rmse is not None else float("inf")))
+            successful_outputs.append((model_name, output, ranking_rmse if ranking_rmse is not None else float("inf")))
         except Exception as exc:
             rows.append(
                 {
                     "Model": model_label,
                     "Test R squared": "-",
-                    "Test RMSE": "-",
+                    "Default RMSE": "-",
+                    "Default CV RMSE": "-",
+                    "Tuned RMSE": "-",
+                    "Tuned CV RMSE": "-",
                     "Test MAE": "-",
                     "CV R squared": "-",
-                    "CV RMSE": "-",
+                    "Best params": "-",
                     "Status": str(exc),
                     "_rmse": float("inf"),
                     "_model_name": model_name,
@@ -3051,6 +3456,16 @@ def handle_regression_comparison_submission(tab, dataset):
     if successful_outputs:
         best_model_name, _, _ = min(successful_outputs, key=lambda item: item[2])
         detail_model_name, detail_output = choose_detail_model(tab, successful_outputs, best_model_name)
+        detail_options = detail_options_with_tuning(options, detail_model_name, tuned_results)
+        if detail_options is not options:
+            detail_output = refit_tuned_detail_output(
+                tab,
+                dataset,
+                detail_model_name,
+                detail_options,
+                REGRESSION_MODEL_FITTERS,
+                fit_linear_regression,
+            )
         tab["selected_model"] = detail_model_name
         tab["selected_models"] = [row["_model_name"] for row in rows]
         detail_output = add_regression_analytics(
@@ -3060,7 +3475,7 @@ def handle_regression_comparison_submission(tab, dataset):
             tab["selected_predictors"],
             detail_model_name,
             tab["selected_test_size"],
-            options,
+            detail_options,
         )
         tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
@@ -3071,7 +3486,7 @@ def handle_regression_comparison_submission(tab, dataset):
     table_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
     tab["comparison_html"], comparison = comparison_html(
         table_rows,
-        ["Model", "Test R squared", "Test RMSE", "Test MAE", "CV R squared", "CV RMSE", "Status"],
+        ["Model", "Test R squared", "Default RMSE", "Default CV RMSE", "Tuned RMSE", "Tuned CV RMSE", "Test MAE", "CV R squared", "Best params", "Status"],
     )
     tab["comparison_download"] = register_comparison_download(tab, comparison)
 
@@ -3256,6 +3671,8 @@ def report_metadata_table(tab_name, snapshot, dataset):
         {"Field": "Feature scaling", "Value": preprocessing_details(snapshot).get("Feature scaling", "-")},
         {"Field": "Split seed", "Value": snapshot.get("selected_split_seed", 42)},
         {"Field": "Outlier handling", "Value": preprocessing_details(snapshot).get("Outlier handling", "-")},
+        {"Field": "Hyperparameter tuning", "Value": {"off": "Off", "grid": "Grid search", "random": "Random search"}.get(snapshot.get("selected_tuning_mode", "off"), "Off")},
+        {"Field": "Random search iterations", "Value": snapshot.get("selected_tuning_iterations", 10)},
     ]
     return pd.DataFrame(rows).to_html(index=False, border=0, classes="report-table")
 
@@ -3418,6 +3835,19 @@ def download_result(result_type, artifact):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
