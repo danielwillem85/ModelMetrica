@@ -4,3 +4,4 @@ openpyxl
 xlrd
 scikit-learn
 matplotlib
+python-dotenv

@@ -1,3 +1,4 @@
 __pycache__/
 *.py[cod]
 modelmetrica_users.sqlite3
+.env

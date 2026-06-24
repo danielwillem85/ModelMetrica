@@ -38,6 +38,10 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from werkzeug.security import check_password_hash, generate_password_hash
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 
 app = Flask(__name__)
@@ -1546,7 +1550,11 @@ def user_has_subscription(user=None):
 
 
 def mollie_configured():
-    return bool(MOLLIE_API_KEY)
+    return bool(MOLLIE_API_KEY) and mollie_api_key_valid()
+
+
+def mollie_api_key_valid():
+    return MOLLIE_API_KEY.startswith(("test_", "live_"))
 
 
 def external_url_for(endpoint, **values):
@@ -1558,6 +1566,8 @@ def external_url_for(endpoint, **values):
 def mollie_request(method, path, payload=None):
     if not MOLLIE_API_KEY:
         raise RuntimeError("Mollie API key is not configured.")
+    if not mollie_api_key_valid():
+        raise RuntimeError("MOLLIE_API_KEY must be a Mollie profile API key that starts with test_ or live_.")
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request_obj = Request(
         f"{MOLLIE_API_BASE}{path}",
