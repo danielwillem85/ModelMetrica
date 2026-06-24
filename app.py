@@ -75,6 +75,9 @@ SUBSCRIPTION_AMOUNT = os.environ.get("MODELMETRICA_SUBSCRIPTION_AMOUNT", "9.99")
 SUBSCRIPTION_CURRENCY = os.environ.get("MODELMETRICA_SUBSCRIPTION_CURRENCY", "EUR")
 SUBSCRIPTION_INTERVAL = os.environ.get("MODELMETRICA_SUBSCRIPTION_INTERVAL", "1 month")
 SUBSCRIPTION_DESCRIPTION = os.environ.get("MODELMETRICA_SUBSCRIPTION_DESCRIPTION", "ModelMetrica Pro subscription")
+MAILJET_NOTIFICATION_TO = os.environ.get("MAILJET_NOTIFICATION_TO", "danielvdpalm@gmail.com")
+MAILJET_FROM_EMAIL = os.environ.get("MAILJET_FROM_EMAIL", "pilot@mailjet.com")
+MAILJET_FROM_NAME = os.environ.get("MAILJET_FROM_NAME", "ModelMetrica")
 
 PAGE_TEMPLATE = """
 {% macro render_classification_tab(tab, active_tab, has_data, columns) %}
@@ -1591,7 +1594,9 @@ def create_user(username, password):
             "INSERT INTO users (username, password_hash) VALUES (?, ?)",
             (username, password_hash),
         )
-        return cursor.lastrowid
+        user_id = cursor.lastrowid
+    send_registration_email(user_id, username)
+    return user_id
 
 
 def authenticate_user(username, password):
@@ -1608,6 +1613,74 @@ def log_user_in(user_id, username):
 
 def is_user_authenticated():
     return bool(session.get("user_id"))
+
+
+def mailjet_configured():
+    public_key = os.environ.get("MJ_APIKEY_PUBLIC", "")
+    private_key = os.environ.get("MJ_APIKEY_PRIVATE", "")
+    return bool(public_key and private_key and not public_key.startswith("replace_") and not private_key.startswith("replace_"))
+
+
+def send_mailjet_notification(subject, text_part, html_part):
+    if not mailjet_configured():
+        return None
+    try:
+        from mailjet_rest import Client
+    except ImportError:
+        return None
+
+    mailjet = Client(
+        auth=(os.environ["MJ_APIKEY_PUBLIC"], os.environ["MJ_APIKEY_PRIVATE"]),
+        version="v3.1",
+    )
+    data = {
+        "Messages": [
+            {
+                "From": {
+                    "Email": MAILJET_FROM_EMAIL,
+                    "Name": MAILJET_FROM_NAME,
+                },
+                "To": [
+                    {
+                        "Email": MAILJET_NOTIFICATION_TO,
+                        "Name": "ModelMetrica Admin",
+                    }
+                ],
+                "Subject": subject,
+                "TextPart": text_part,
+                "HTMLPart": html_part,
+            }
+        ]
+    }
+    try:
+        result = mailjet.send.create(data=data)
+        return {"status_code": result.status_code, "body": result.json()}
+    except Exception:
+        return None
+
+
+def send_registration_email(user_id, username):
+    escaped_username = html.escape(username)
+    send_mailjet_notification(
+        "New ModelMetrica user registration",
+        f"New user registered: {username} (user id {user_id}).",
+        f"<h3>New ModelMetrica user registration</h3><p>User: {escaped_username}</p><p>User ID: {user_id}</p>",
+    )
+
+
+def send_subscription_success_email(user_id, username, subscription_id):
+    escaped_username = html.escape(username)
+    escaped_subscription_id = html.escape(subscription_id or "-")
+    send_mailjet_notification(
+        "New ModelMetrica Pro subscription",
+        f"User {username} (user id {user_id}) subscribed successfully. Subscription ID: {subscription_id or '-'}",
+        (
+            "<h3>New ModelMetrica Pro subscription</h3>"
+            f"<p>User: {escaped_username}</p>"
+            f"<p>User ID: {user_id}</p>"
+            f"<p>Subscription ID: {escaped_subscription_id}</p>"
+        ),
+    )
 
 
 init_auth_db()
@@ -1789,6 +1862,8 @@ def create_mollie_subscription(user_id, customer_id):
             """,
             (subscription_id, user_id),
         )
+    username = user["username"] if user else str(user_id)
+    send_subscription_success_email(user_id, username, subscription_id)
     return subscription_id
 
 
