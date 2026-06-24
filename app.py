@@ -44,6 +44,8 @@ ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx"}
 DB_PATH = Path(__file__).with_name("modelmetrica_users.sqlite3")
 DATASETS = {}
 DOWNLOADS = {}
+DISPLAY_DECIMALS = 3
+DISPLAY_FLOAT_FORMAT = f"{{:.{DISPLAY_DECIMALS}f}}".format
 
 PAGE_TEMPLATE = """
 {% macro render_classification_tab(tab, active_tab, has_data, columns) %}
@@ -167,8 +169,8 @@ PAGE_TEMPLATE = """
               <div>
                 <label for="{{ tab.threshold_field }}">Decision threshold</label>
                 <div class="threshold-control">
-                  <input id="{{ tab.threshold_field }}" name="{{ tab.threshold_field }}" type="range" min="0.05" max="0.95" step="0.01" value="{{ '%.2f'|format(tab.selected_threshold) }}" data-threshold-input>
-                  <output for="{{ tab.threshold_field }}" data-threshold-output>{{ '%.2f'|format(tab.selected_threshold) }}</output>
+                  <input id="{{ tab.threshold_field }}" name="{{ tab.threshold_field }}" type="range" min="0.05" max="0.95" step="0.001" value="{{ '%.3f'|format(tab.selected_threshold) }}" data-threshold-input>
+                  <output for="{{ tab.threshold_field }}" data-threshold-output>{{ '%.3f'|format(tab.selected_threshold) }}</output>
                 </div>
               </div>
               {% endif %}
@@ -1155,8 +1157,8 @@ PAGE_TEMPLATE = """
         const output = input.closest(".threshold-control")?.querySelector("[data-threshold-output]");
         const update = () => {
           if (output) {
-            output.value = Number(input.value).toFixed(2);
-            output.textContent = Number(input.value).toFixed(2);
+            output.value = Number(input.value).toFixed(3);
+            output.textContent = Number(input.value).toFixed(3);
           }
         };
         input.addEventListener("input", update);
@@ -1332,6 +1334,30 @@ def current_dataset():
     return DATASETS.get(current_id) or load_dataset_from_db(current_id)
 
 
+def display_value(value):
+    if isinstance(value, (float, np.floating)):
+        if not np.isfinite(value):
+            return ""
+        return DISPLAY_FLOAT_FORMAT(float(value))
+    return value
+
+
+def display_frame(frame):
+    if frame is None:
+        return frame
+    display = frame.copy()
+    for column in display.columns:
+        if pd.api.types.is_float_dtype(display[column]):
+            display[column] = display[column].map(display_value)
+        elif pd.api.types.is_object_dtype(display[column]):
+            display[column] = display[column].map(display_value)
+    return display
+
+
+def display_table(frame, **kwargs):
+    return display_frame(frame).to_html(**kwargs)
+
+
 def save_dataset(data, filename):
     current_id = str(uuid4())
     DATASETS[current_id] = {"data": data, "filename": filename}
@@ -1348,7 +1374,8 @@ def save_dataset(data, filename):
 
 def preview_table(data):
     preview = data.head(25)
-    return preview.to_html(
+    return display_table(
+        preview,
         classes="preview-table",
         index=False,
         border=0,
@@ -1812,7 +1839,7 @@ def confusion_table(actual, predicted):
 
 
 def details_table(details):
-    return details_frame(details).to_html(index=False, border=0, classes="model-details")
+    return display_table(details_frame(details), index=False, border=0, classes="model-details")
 
 
 def importance_frame(feature_names, importances):
@@ -1830,7 +1857,7 @@ def importance_frame(feature_names, importances):
 
 
 def importance_table(feature_names, importances):
-    return importance_frame(feature_names, importances).to_html(index=False, border=0, classes="importances", float_format="{:.4f}".format)
+    return display_table(importance_frame(feature_names, importances), index=False, border=0, classes="importances")
 
 
 def permutation_importance_frame(model, x_test, y_test, feature_names, scoring, options):
@@ -1857,7 +1884,7 @@ def permutation_importance_frame(model, x_test, y_test, feature_names, scoring, 
 
 
 def permutation_importance_html(importances):
-    return importances.to_html(index=False, border=0, classes="importances", float_format="{:.4f}".format)
+    return display_table(importances, index=False, border=0, classes="importances")
 
 
 def tree_plot_image(tree, feature_names, class_names):
@@ -1963,7 +1990,7 @@ def fit_logistic_regression(data, target, predictors, test_size, cv_folds, optio
         "target": target,
         "positive_class": str(classes[1]),
         "metrics": metrics,
-        "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
+        "coefficients_html": display_table(coefficients, index=False, border=0, classes="coefficients"),
         "importances_html": None,
         "details_html": details_table(add_preprocessing_details(details, options)),
         "confusion_html": confusion.to_html(border=0, classes="confusion"),
@@ -2313,7 +2340,7 @@ def regression_coefficient_table(feature_names, coefficients):
             "Coefficient": coefficients,
         }
     )
-    return coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format)
+    return display_table(coefficients, index=False, border=0, classes="coefficients")
 
 
 def fit_linear_regression(data, target, predictors, test_size, cv_folds, options=None):
@@ -2366,7 +2393,7 @@ def fit_linear_regression(data, target, predictors, test_size, cv_folds, options
         "description": f"Target: {target}. Ordinary least squares fit; metrics are computed on the held-out test set.",
         "target": target,
         "metrics": metrics,
-        "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
+        "coefficients_html": display_table(coefficients, index=False, border=0, classes="coefficients"),
         "importances_html": None,
         "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
@@ -2404,7 +2431,7 @@ def fit_ridge_regression(data, target, predictors, test_size, cv_folds, options=
         "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
         "metrics": metrics,
-        "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
+        "coefficients_html": display_table(coefficients, index=False, border=0, classes="coefficients"),
         "importances_html": None,
         "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
@@ -2448,7 +2475,7 @@ def fit_lasso_regression(data, target, predictors, test_size, cv_folds, options=
         "description": f"Target: {target}. Predictors were standardized using the training split; test-set metrics are shown.",
         "target": target,
         "metrics": metrics,
-        "coefficients_html": coefficients.to_html(index=False, border=0, classes="coefficients", float_format="{:.4f}".format),
+        "coefficients_html": display_table(coefficients, index=False, border=0, classes="coefficients"),
         "importances_html": None,
         "details_html": details_table(add_preprocessing_details(details, options)),
         "download_data": {
@@ -3113,7 +3140,7 @@ def threshold_metrics(y_true, scores, threshold):
 def threshold_metrics_frame(metrics):
     return pd.DataFrame(
         [
-            {"Metric": "Threshold", "Value": f"{metrics['threshold']:.2f}"},
+            {"Metric": "Threshold", "Value": f"{metrics['threshold']:.3f}"},
             {"Metric": "Accuracy", "Value": f"{metrics['accuracy']:.3f}"},
             {"Metric": "Precision", "Value": f"{metrics['precision']:.3f}"},
             {"Metric": "Recall", "Value": f"{metrics['recall']:.3f}"},
@@ -3126,16 +3153,16 @@ def threshold_metrics_frame(metrics):
 
 def threshold_analysis_table(y_true, scores, selected_threshold=0.5):
     rows = []
-    thresholds = sorted({round(float(threshold), 2) for threshold in np.arange(0.1, 1.0, 0.1)} | {round(float(selected_threshold), 2)})
+    thresholds = sorted({round(float(threshold), 3) for threshold in np.arange(0.1, 1.0, 0.1)} | {round(float(selected_threshold), 3)})
     threshold_results = [threshold_metrics(y_true, scores, threshold) for threshold in thresholds]
     best_f1 = max((result["f1"] for result in threshold_results), default=0.0)
     for result in threshold_results:
         threshold = result["threshold"]
-        is_selected = math.isclose(threshold, selected_threshold, abs_tol=0.005)
+        is_selected = math.isclose(threshold, selected_threshold, abs_tol=0.0005)
         is_best = math.isclose(result["f1"], best_f1, abs_tol=1e-12)
         rows.append(
             {
-                "Threshold": f"{threshold:.2f}",
+                "Threshold": f"{threshold:.3f}",
                 "Accuracy": f"{result['accuracy']:.3f}",
                 "Precision": f"{result['precision']:.3f}",
                 "Recall": f"{result['recall']:.3f}",
@@ -3186,14 +3213,14 @@ def add_binary_classification_analytics(output, data, target, predictors, model_
             annotation=f"Avg. precision = {average_precision:.3f}",
         )
         output["confusion_html"] = selected_confusion.to_html(border=0, classes="confusion")
-        output["selected_threshold_html"] = selected_threshold_frame.to_html(index=False, border=0, classes="selected-threshold")
-        output["threshold_html"] = threshold_table.to_html(index=False, border=0, classes="threshold-analysis")
+        output["selected_threshold_html"] = display_table(selected_threshold_frame, index=False, border=0, classes="selected-threshold")
+        output["threshold_html"] = display_table(threshold_table, index=False, border=0, classes="threshold-analysis")
         output.setdefault("download_data", {})["confusion_matrix"] = selected_confusion.to_csv()
         output.setdefault("download_data", {})["selected_threshold_metrics"] = selected_threshold_frame.to_csv(index=False)
         output.setdefault("download_data", {})["threshold_analysis"] = threshold_table.to_csv(index=False)
         output.setdefault("metrics", []).extend(
             [
-                {"label": "Decision threshold", "value": f"{threshold:.2f}"},
+                {"label": "Decision threshold", "value": f"{threshold:.3f}"},
                 {"label": "Threshold accuracy", "value": f"{selected_threshold_metrics['accuracy']:.3f}"},
                 {"label": "Threshold precision", "value": f"{selected_threshold_metrics['precision']:.3f}"},
                 {"label": "Threshold recall", "value": f"{selected_threshold_metrics['recall']:.3f}"},
@@ -3390,8 +3417,8 @@ def add_cv_diagnostics(output, tab, data, model_name, options=None):
 
     summary = diagnostics["summary"]
     folds_frame = diagnostics["folds"]
-    output["cv_summary_html"] = summary.to_html(index=False, border=0, classes="cv-summary", float_format="{:.3f}".format)
-    output["cv_diagnostics_html"] = folds_frame.to_html(index=False, border=0, classes="cv-diagnostics", float_format="{:.3f}".format)
+    output["cv_summary_html"] = display_table(summary, index=False, border=0, classes="cv-summary")
+    output["cv_diagnostics_html"] = display_table(folds_frame, index=False, border=0, classes="cv-diagnostics")
     output["cv_plot"] = diagnostics["plot"]
     output.setdefault("download_data", {})["cv_summary"] = summary.to_csv(index=False)
     output.setdefault("download_data", {})["cv_diagnostics"] = folds_frame.to_csv(index=False)
@@ -3455,7 +3482,7 @@ def add_regression_analytics(output, data, target, predictors, model_name, test_
             "Residual",
             "Residual distribution",
         )
-        output["residual_diagnostics_html"] = diagnostics.head(25).to_html(index=False, border=0, classes="residual-diagnostics")
+        output["residual_diagnostics_html"] = display_table(diagnostics.head(25), index=False, border=0, classes="residual-diagnostics")
         output.setdefault("download_data", {})["residual_diagnostics"] = diagnostics.to_csv(index=False)
         output.setdefault("metrics", []).extend(
             [
@@ -3542,7 +3569,7 @@ def detail_metric_comparison_html(tab, rows, model_name, display_columns):
         ]
 
     metric_rows.append({"Metric": "Best params", "Default": "-", "Tuned": selected_row.get("Best params", "-")})
-    return pd.DataFrame(metric_rows)[display_columns].to_html(index=False, border=0, classes="detail-metric-comparison")
+    return display_table(pd.DataFrame(metric_rows)[display_columns], index=False, border=0, classes="detail-metric-comparison")
 
 
 def parse_display_metric(value):
@@ -3574,7 +3601,7 @@ def recommendation_html(recommendation):
     frame = recommendation_report_frame(recommendation)
     if frame.empty:
         return ""
-    return frame.to_html(index=False, border=0, classes="report-table")
+    return display_table(frame, index=False, border=0, classes="report-table")
 
 
 def build_classification_recommendation(tab, rows, best_model_name, detail_model_name, output):
@@ -3588,7 +3615,7 @@ def build_classification_recommendation(tab, rows, best_model_name, detail_model
     recall = metric_float(output, "Threshold recall") or parse_display_metric(selected_row.get("Recall"))
     f1 = metric_float(output, "Threshold F1") or parse_display_metric(selected_row.get("F1"))
     specificity = metric_float(output, "Threshold specificity")
-    threshold = metric_value(output, "Decision threshold") or f"{tab.get('selected_threshold', 0.5):.2f}"
+    threshold = metric_value(output, "Decision threshold") or f"{tab.get('selected_threshold', 0.5):.3f}"
     tuned_accuracy = parse_display_metric(selected_row.get("Tuned accuracy"))
     default_accuracy = parse_display_metric(selected_row.get("Default accuracy"))
 
@@ -4416,7 +4443,7 @@ def csv_report_table(csv_data, css_class="report-table"):
     if not csv_data:
         return ""
     try:
-        return pd.read_csv(StringIO(csv_data)).to_html(index=False, border=0, classes=css_class)
+        return display_table(pd.read_csv(StringIO(csv_data)), index=False, border=0, classes=css_class)
     except Exception:
         return f"<pre>{html.escape(csv_data)}</pre>"
 
@@ -4425,7 +4452,7 @@ def metrics_report_table(metrics):
     if not metrics:
         return ""
     rows = [{"Metric": item.get("label", ""), "Value": item.get("value", "")} for item in metrics]
-    return pd.DataFrame(rows).to_html(index=False, border=0, classes="report-table")
+    return display_table(pd.DataFrame(rows), index=False, border=0, classes="report-table")
 
 
 def report_model_labels(tab_name, models):
@@ -4458,13 +4485,13 @@ def report_metadata_rows(tab_name, snapshot, dataset):
         {"Field": "Outlier handling", "Value": preprocessing_details(snapshot).get("Outlier handling", "-")},
         {"Field": "Hyperparameter tuning", "Value": {"off": "Off", "grid": "Grid search", "random": "Random search"}.get(snapshot.get("selected_tuning_mode", "off"), "Off")},
         {"Field": "Random search iterations", "Value": snapshot.get("selected_tuning_iterations", 10)},
-        {"Field": "Decision threshold", "Value": f"{float(snapshot.get('selected_threshold') or 0.5):.2f}" if tab_name == "pro_classification" else "-"},
+        {"Field": "Decision threshold", "Value": f"{float(snapshot.get('selected_threshold') or 0.5):.3f}" if tab_name == "pro_classification" else "-"},
     ]
 
 
 def report_metadata_table(tab_name, snapshot, dataset):
     rows = report_metadata_rows(tab_name, snapshot, dataset)
-    return pd.DataFrame(rows).to_html(index=False, border=0, classes="report-table")
+    return display_table(pd.DataFrame(rows), index=False, border=0, classes="report-table")
 
 
 def report_image(title, image_data, alt_text):
@@ -4628,7 +4655,7 @@ def add_pdf_table_pages(pdf, title, frame, rows_per_page=24):
     if frame is None or frame.empty:
         return
 
-    frame = frame.copy().fillna("")
+    frame = display_frame(frame).copy().fillna("")
     for start in range(0, len(frame), rows_per_page):
         chunk = frame.iloc[start : start + rows_per_page].copy()
         for column in chunk.columns:
