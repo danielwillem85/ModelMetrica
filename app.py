@@ -6,6 +6,7 @@ import html
 import json
 import math
 import os
+import ssl
 import sqlite3
 import textwrap
 from pathlib import Path
@@ -76,7 +77,7 @@ SUBSCRIPTION_CURRENCY = os.environ.get("MODELMETRICA_SUBSCRIPTION_CURRENCY", "EU
 SUBSCRIPTION_INTERVAL = os.environ.get("MODELMETRICA_SUBSCRIPTION_INTERVAL", "1 month")
 SUBSCRIPTION_DESCRIPTION = os.environ.get("MODELMETRICA_SUBSCRIPTION_DESCRIPTION", "ModelMetrica Pro subscription")
 MAILJET_NOTIFICATION_TO = os.environ.get("MAILJET_NOTIFICATION_TO", "danielvdpalm@gmail.com")
-MAILJET_FROM_EMAIL = os.environ.get("MAILJET_FROM_EMAIL", "pilot@mailjet.com")
+MAILJET_FROM_EMAIL = os.environ.get("MAILJET_FROM_EMAIL", "danielvdpalm@gmail.com")
 MAILJET_FROM_NAME = os.environ.get("MAILJET_FROM_NAME", "ModelMetrica")
 
 PAGE_TEMPLATE = """
@@ -1624,15 +1625,6 @@ def mailjet_configured():
 def send_mailjet_notification(subject, text_part, html_part):
     if not mailjet_configured():
         return None
-    try:
-        from mailjet_rest import Client
-    except ImportError:
-        return None
-
-    mailjet = Client(
-        auth=(os.environ["MJ_APIKEY_PUBLIC"], os.environ["MJ_APIKEY_PRIVATE"]),
-        version="v3.1",
-    )
     data = {
         "Messages": [
             {
@@ -1652,10 +1644,49 @@ def send_mailjet_notification(subject, text_part, html_part):
             }
         ]
     }
+
     try:
+        try:
+            from mailjet_rest import Client
+        except ImportError:
+            credentials = f"{os.environ['MJ_APIKEY_PUBLIC']}:{os.environ['MJ_APIKEY_PRIVATE']}".encode("utf-8")
+            request_obj = Request(
+                "https://api.mailjet.com/v3.1/send",
+                data=json.dumps(data).encode("utf-8"),
+                method="POST",
+                headers={
+                    "Authorization": f"Basic {base64.b64encode(credentials).decode('ascii')}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            )
+            try:
+                import certifi
+                ssl_context = ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                ssl_context = ssl.create_default_context()
+            if hasattr(ssl, "VERIFY_X509_STRICT"):
+                ssl_context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+            if hasattr(ssl, "enum_certificates"):
+                windows_certs = []
+                for store_name in ("ROOT", "CA"):
+                    for certificate, encoding, trust in ssl.enum_certificates(store_name):
+                        if encoding == "x509_asn" and (trust is True or "1.3.6.1.5.5.7.3.1" in trust):
+                            windows_certs.append(ssl.DER_cert_to_PEM_cert(certificate))
+                if windows_certs:
+                    ssl_context.load_verify_locations(cadata="\n".join(windows_certs))
+            with urlopen(request_obj, timeout=20, context=ssl_context) as response:
+                body = response.read().decode("utf-8")
+                return {"status_code": response.status, "body": json.loads(body) if body else {}}
+
+        mailjet = Client(
+            auth=(os.environ["MJ_APIKEY_PUBLIC"], os.environ["MJ_APIKEY_PRIVATE"]),
+            version="v3.1",
+        )
         result = mailjet.send.create(data=data)
         return {"status_code": result.status_code, "body": result.json()}
-    except Exception:
+    except Exception as exc:
+        print(f"Mailjet notification failed: {exc}")
         return None
 
 
@@ -5531,10 +5562,6 @@ def download_result(result_type, artifact):
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
-
 
 
 
