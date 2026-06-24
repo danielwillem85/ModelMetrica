@@ -233,6 +233,39 @@ PAGE_TEMPLATE = """
           </div>
         {% endif %}
         {% if tab.output %}
+          {% if tab.recommendation %}
+            <div class="panel recommendation-panel">
+              <h2>Model recommendation</h2>
+              <p><strong>{{ tab.recommendation.title }}</strong></p>
+              <p>{{ tab.recommendation.summary }}</p>
+              <div class="recommendation-grid">
+                <div>
+                  <h3>Evidence</h3>
+                  <ul>
+                    {% for item in tab.recommendation.evidence %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+                <div>
+                  <h3>Concerns</h3>
+                  <ul>
+                    {% for item in tab.recommendation.concerns %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+                <div>
+                  <h3>Next actions</h3>
+                  <ul>
+                    {% for item in tab.recommendation.actions %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          {% endif %}
           <div class="panel">
             <h2>{{ tab.output.title }}</h2>
             <p>{{ tab.output.description }}</p>
@@ -509,6 +542,39 @@ PAGE_TEMPLATE = """
           </div>
         {% endif %}
         {% if tab.output %}
+          {% if tab.recommendation %}
+            <div class="panel recommendation-panel">
+              <h2>Model recommendation</h2>
+              <p><strong>{{ tab.recommendation.title }}</strong></p>
+              <p>{{ tab.recommendation.summary }}</p>
+              <div class="recommendation-grid">
+                <div>
+                  <h3>Evidence</h3>
+                  <ul>
+                    {% for item in tab.recommendation.evidence %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+                <div>
+                  <h3>Concerns</h3>
+                  <ul>
+                    {% for item in tab.recommendation.concerns %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+                <div>
+                  <h3>Next actions</h3>
+                  <ul>
+                    {% for item in tab.recommendation.actions %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          {% endif %}
           <div class="panel">
             <h2>{{ tab.output.title }}</h2>
             <p>{{ tab.output.description }}</p>
@@ -891,6 +957,24 @@ PAGE_TEMPLATE = """
       .status-badge.fit {
         background: #f8fafc;
       }
+      .recommendation-panel {
+        border-left: 4px solid var(--accent);
+      }
+      .recommendation-grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .recommendation-grid h3 {
+        margin-bottom: 8px;
+      }
+      .recommendation-grid ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+      .recommendation-grid li {
+        margin-bottom: 7px;
+      }
       .threshold-control {
         align-items: center;
         display: grid;
@@ -911,6 +995,9 @@ PAGE_TEMPLATE = """
       }
       @media (max-width: 760px) {
         .metric-row {
+          grid-template-columns: 1fr;
+        }
+        .recommendation-grid {
           grid-template-columns: 1fr;
         }
         .auth-grid {
@@ -2659,6 +2746,7 @@ def make_model_tab(config):
             "output": None,
             "comparison_html": None,
             "detail_metric_comparison_html": None,
+            "recommendation": None,
             "comparison_download": None,
             "report_download": None,
             "report_pdf_download": None,
@@ -3457,6 +3545,162 @@ def detail_metric_comparison_html(tab, rows, model_name, display_columns):
     return pd.DataFrame(metric_rows)[display_columns].to_html(index=False, border=0, classes="detail-metric-comparison")
 
 
+def parse_display_metric(value):
+    try:
+        return float(str(value).replace("%", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def recommendation_label(tab, model_name):
+    return model_label_for_run(tab, model_name) if model_name else "Selected model"
+
+
+def recommendation_report_frame(recommendation):
+    if not recommendation:
+        return pd.DataFrame()
+    rows = [
+        {"Section": "Recommendation", "Item": recommendation.get("title", "")},
+        {"Section": "Summary", "Item": recommendation.get("summary", "")},
+    ]
+    for section in ["evidence", "concerns", "actions"]:
+        section_label = section.capitalize()
+        for item in recommendation.get(section, []):
+            rows.append({"Section": section_label, "Item": item})
+    return pd.DataFrame(rows)
+
+
+def recommendation_html(recommendation):
+    frame = recommendation_report_frame(recommendation)
+    if frame.empty:
+        return ""
+    return frame.to_html(index=False, border=0, classes="report-table")
+
+
+def build_classification_recommendation(tab, rows, best_model_name, detail_model_name, output):
+    selected_row = next((row for row in rows if row.get("_model_name") == detail_model_name), {})
+    best_label = recommendation_label(tab, best_model_name)
+    detail_label = recommendation_label(tab, detail_model_name)
+    accuracy = parse_display_metric(selected_row.get("Tuned accuracy")) or parse_display_metric(selected_row.get("Default accuracy"))
+    cv_accuracy = parse_display_metric(selected_row.get("Tuned CV accuracy")) or parse_display_metric(selected_row.get("Default CV accuracy"))
+    cv_sd = parse_display_metric(selected_row.get("CV accuracy SD"))
+    precision = metric_float(output, "Threshold precision") or parse_display_metric(selected_row.get("Precision"))
+    recall = metric_float(output, "Threshold recall") or parse_display_metric(selected_row.get("Recall"))
+    f1 = metric_float(output, "Threshold F1") or parse_display_metric(selected_row.get("F1"))
+    specificity = metric_float(output, "Threshold specificity")
+    threshold = metric_value(output, "Decision threshold") or f"{tab.get('selected_threshold', 0.5):.2f}"
+    tuned_accuracy = parse_display_metric(selected_row.get("Tuned accuracy"))
+    default_accuracy = parse_display_metric(selected_row.get("Default accuracy"))
+
+    evidence = []
+    if accuracy is not None:
+        evidence.append(f"{detail_label} has test accuracy {accuracy:.3f}.")
+    if cv_accuracy is not None:
+        evidence.append(f"Cross-validation accuracy is {cv_accuracy:.3f}.")
+    if cv_sd is not None:
+        evidence.append(f"CV accuracy SD is {cv_sd:.3f}, indicating {'stable' if cv_sd < 0.04 else 'variable'} fold performance.")
+    if f1 is not None:
+        evidence.append(f"At threshold {threshold}, F1 is {f1:.3f}.")
+    if precision is not None and recall is not None:
+        evidence.append(f"Threshold tradeoff: precision {precision:.3f}, recall {recall:.3f}.")
+
+    concerns = []
+    if best_model_name and detail_model_name != best_model_name:
+        concerns.append(f"The selected detail model is not the top-ranked model; {best_label} ranked best in the comparison.")
+    if cv_sd is not None and cv_sd >= 0.06:
+        concerns.append("CV accuracy varies noticeably across folds, so the result may be split-sensitive.")
+    if tuned_accuracy is not None and default_accuracy is not None and tuned_accuracy <= default_accuracy + 0.001:
+        concerns.append("Hyperparameter tuning did not materially improve test accuracy.")
+    if precision is not None and recall is not None and abs(precision - recall) >= 0.15:
+        higher = "precision" if precision > recall else "recall"
+        concerns.append(f"The selected threshold is {higher}-heavy; review whether that matches the decision cost.")
+    if specificity is not None and recall is not None and abs(specificity - recall) >= 0.2:
+        concerns.append("Recall and specificity are far apart, suggesting asymmetric errors at the selected threshold.")
+    if not concerns:
+        concerns.append("No major stability or threshold concerns are visible from the current diagnostics.")
+
+    actions = []
+    if best_model_name and detail_model_name != best_model_name:
+        actions.append(f"Inspect {best_label} as the detail model before finalizing.")
+    if cv_sd is not None and cv_sd >= 0.06:
+        actions.append("Try more folds, more data, or simpler models to confirm stability.")
+    if precision is not None and recall is not None:
+        actions.append("Adjust the decision threshold to balance precision and recall for the use case.")
+    if not tuning_enabled(tab):
+        actions.append("Enable hyperparameter tuning for the strongest candidate models.")
+    actions.append("Review feature importance or coefficients for plausibility before sharing the report.")
+
+    title = f"Recommend {best_label}"
+    if detail_model_name != best_model_name:
+        summary = f"{best_label} is recommended by the comparison ranking; the panel below currently explains selected detail model {detail_label}."
+    else:
+        summary = f"{detail_label} is the strongest current candidate based on the comparison ranking and selected-threshold diagnostics."
+
+    return {"title": title, "summary": summary, "evidence": evidence, "concerns": concerns, "actions": actions}
+
+
+def build_regression_recommendation(tab, rows, best_model_name, detail_model_name, output):
+    selected_row = next((row for row in rows if row.get("_model_name") == detail_model_name), {})
+    best_label = recommendation_label(tab, best_model_name)
+    detail_label = recommendation_label(tab, detail_model_name)
+    rmse = parse_display_metric(selected_row.get("Tuned RMSE")) or parse_display_metric(selected_row.get("Default RMSE"))
+    cv_rmse = parse_display_metric(selected_row.get("Tuned CV RMSE")) or parse_display_metric(selected_row.get("Default CV RMSE"))
+    cv_rmse_sd = parse_display_metric(selected_row.get("CV RMSE SD"))
+    r_squared = parse_display_metric(selected_row.get("Test R squared"))
+    cv_r_squared = parse_display_metric(selected_row.get("CV R squared"))
+    residual_mean = metric_float(output, "Residual mean")
+    residual_sd = metric_float(output, "Residual SD")
+    tuned_rmse = parse_display_metric(selected_row.get("Tuned RMSE"))
+    default_rmse = parse_display_metric(selected_row.get("Default RMSE"))
+
+    evidence = []
+    if rmse is not None:
+        evidence.append(f"{detail_label} has test RMSE {rmse:.3f}.")
+    if r_squared is not None:
+        evidence.append(f"Test R squared is {r_squared:.3f}.")
+    if cv_rmse is not None:
+        evidence.append(f"Cross-validation RMSE is {cv_rmse:.3f}.")
+    if cv_rmse_sd is not None:
+        evidence.append(f"CV RMSE SD is {cv_rmse_sd:.3f}.")
+    if residual_mean is not None and residual_sd is not None:
+        evidence.append(f"Residual mean is {residual_mean:.3f} with residual SD {residual_sd:.3f}.")
+
+    concerns = []
+    if best_model_name and detail_model_name != best_model_name:
+        concerns.append(f"The selected detail model is not the top-ranked model; {best_label} ranked best by RMSE.")
+    if cv_rmse is not None and rmse is not None and cv_rmse > rmse * 1.25:
+        concerns.append("CV RMSE is substantially higher than test RMSE, suggesting possible split optimism.")
+    if cv_rmse_sd is not None and cv_rmse is not None and cv_rmse_sd > cv_rmse * 0.2:
+        concerns.append("CV RMSE varies meaningfully across folds.")
+    if residual_mean is not None and residual_sd is not None and residual_sd > 0 and abs(residual_mean) > residual_sd * 0.1:
+        concerns.append("Residual mean is not close to zero relative to residual spread, suggesting possible bias.")
+    if tuned_rmse is not None and default_rmse is not None and tuned_rmse >= default_rmse - 0.001:
+        concerns.append("Hyperparameter tuning did not materially reduce RMSE.")
+    if cv_r_squared is not None and cv_r_squared < 0:
+        concerns.append("CV R squared is below zero, so the model may generalize poorly.")
+    if not concerns:
+        concerns.append("No major residual or cross-validation concerns are visible from the current diagnostics.")
+
+    actions = []
+    if best_model_name and detail_model_name != best_model_name:
+        actions.append(f"Inspect {best_label} as the detail model before finalizing.")
+    if cv_rmse_sd is not None and cv_rmse is not None and cv_rmse_sd > cv_rmse * 0.2:
+        actions.append("Compare simpler models or add data to reduce fold-to-fold variability.")
+    if residual_mean is not None and residual_sd is not None and residual_sd > 0 and abs(residual_mean) > residual_sd * 0.1:
+        actions.append("Inspect residual plots for systematic under- or over-prediction.")
+    if not tuning_enabled(tab):
+        actions.append("Enable hyperparameter tuning for regularized and tree-based candidates.")
+    actions.append("Review feature importance or coefficients for domain plausibility.")
+
+    title = f"Recommend {best_label}"
+    if detail_model_name != best_model_name:
+        summary = f"{best_label} is recommended by the comparison ranking; the panel below currently explains selected detail model {detail_label}."
+    else:
+        summary = f"{detail_label} is the strongest current candidate based on RMSE ranking, CV stability, and residual diagnostics."
+
+    return {"title": title, "summary": summary, "evidence": evidence, "concerns": concerns, "actions": actions}
+
+
 
 def choose_detail_model(tab, successful_outputs, best_model_name):
     output_by_model = {model_name: output for model_name, output, _ in successful_outputs}
@@ -3627,9 +3871,11 @@ def handle_classification_comparison_submission(tab, dataset):
             detail_model_name,
             ["Metric", "Default", "Tuned"],
         )
+        tab["recommendation"] = build_classification_recommendation(tab, rows, best_model_name, detail_model_name, tab["output"])
     else:
         tab["error"] = "No selected model could be fit."
         tab["detail_metric_comparison_html"] = None
+        tab["recommendation"] = None
 
     tab["comparison_html"], comparison = comparison_html(rows, ["Model", "Default accuracy", "Default CV accuracy", "CV accuracy SD", "CV accuracy min", "CV accuracy max", "Tuned accuracy", "Tuned CV accuracy", "Precision", "Recall", "F1", "Best params", "Status"])
     tab["comparison_download"] = register_comparison_download(tab, comparison)
@@ -3788,6 +4034,7 @@ def save_pro_run(tab):
         "selected_predictors": list(tab.get("selected_predictors", [])),
         "comparison_html": tab.get("comparison_html"),
         "detail_metric_comparison_html": tab.get("detail_metric_comparison_html"),
+        "recommendation": deepcopy(tab.get("recommendation")),
         "comparison_download": deepcopy(tab.get("comparison_download")),
         "output": deepcopy(tab.get("output")),
         "download_artifacts": tab_download_artifacts(tab),
@@ -3831,6 +4078,7 @@ def restore_pro_run(tab, snapshot):
         "selected_predictors",
         "comparison_html",
         "detail_metric_comparison_html",
+        "recommendation",
         "comparison_download",
         "output",
     ]:
@@ -4015,9 +4263,11 @@ def handle_regression_comparison_submission(tab, dataset):
             detail_model_name,
             ["Metric", "Default", "Tuned"],
         )
+        tab["recommendation"] = build_regression_recommendation(tab, rows, best_model_name, detail_model_name, tab["output"])
     else:
         tab["error"] = "No selected model could be fit."
         tab["detail_metric_comparison_html"] = None
+        tab["recommendation"] = None
 
     tab["comparison_html"], comparison = comparison_html(
         rows,
@@ -4230,6 +4480,7 @@ def report_image(title, image_data, alt_text):
 def pro_report_html(tab_name, snapshot, dataset):
     output = snapshot.get("output") or {}
     artifacts = snapshot.get("download_artifacts") or {}
+    recommendation = snapshot.get("recommendation")
     report_title = "Pro Classification Report" if tab_name == "pro_classification" else "Pro Regression Report"
     selected_title = output.get("title") or "Selected model results"
     selected_description = output.get("description") or ""
@@ -4260,6 +4511,9 @@ def pro_report_html(tab_name, snapshot, dataset):
     comparison_table = csv_report_table(artifacts.get("model_comparison"))
     if comparison_table:
         sections.extend(["<section><h2>Model comparison</h2>", comparison_table, "</section>"])
+
+    if recommendation:
+        sections.extend(["<section><h2>Model recommendation</h2>", recommendation_html(recommendation), "</section>"])
 
     sections.extend([
         "<section><h2>Selected detail model</h2>",
@@ -4422,6 +4676,7 @@ def add_pdf_image_page(pdf, title, image_data):
 def pro_report_pdf_bytes(tab_name, snapshot, dataset):
     output = snapshot.get("output") or {}
     artifacts = snapshot.get("download_artifacts") or {}
+    recommendation = snapshot.get("recommendation")
     report_title = "Pro Classification Report" if tab_name == "pro_classification" else "Pro Regression Report"
     buffer = BytesIO()
 
@@ -4440,6 +4695,7 @@ def pro_report_pdf_bytes(tab_name, snapshot, dataset):
         )
         add_pdf_table_pages(pdf, "Dataset Metadata", pd.DataFrame(report_metadata_rows(tab_name, snapshot, dataset)), rows_per_page=22)
         add_pdf_table_pages(pdf, "Model Comparison", csv_report_frame(artifacts.get("model_comparison")), rows_per_page=18)
+        add_pdf_table_pages(pdf, "Model Recommendation", recommendation_report_frame(recommendation), rows_per_page=20)
         add_pdf_table_pages(pdf, "Selected Detail Metrics", output_metrics_frame(output), rows_per_page=24)
         add_pdf_image_page(pdf, "Cross-Validation Fold Scores", output.get("cv_plot"))
         add_pdf_table_pages(pdf, "Cross-Validation Summary", csv_report_frame(artifacts.get("cv_summary")), rows_per_page=24)
