@@ -54,7 +54,7 @@ PAGE_TEMPLATE = """
           {% if not has_data %}
             <p class="error">Upload a dataset on the Data tab before running classification.</p>
           {% else %}
-            <form method="post">
+            <form method="post" data-run-form>
               <input type="hidden" name="form_name" value="{{ tab.form_name }}">
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div>
@@ -370,7 +370,7 @@ PAGE_TEMPLATE = """
           {% if not has_data %}
             <p class="error">Upload a dataset on the Data tab before running regression.</p>
           {% else %}
-            <form method="post">
+            <form method="post" data-run-form>
               <input type="hidden" name="form_name" value="{{ tab.form_name }}">
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div>
@@ -995,6 +995,53 @@ PAGE_TEMPLATE = """
         padding: 8px 10px;
         text-align: center;
       }
+      .processing-overlay {
+        align-items: center;
+        background: rgba(15, 23, 42, 0.56);
+        bottom: 0;
+        display: none;
+        justify-content: center;
+        left: 0;
+        padding: 24px;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 1000;
+      }
+      .processing-overlay.active {
+        display: flex;
+      }
+      .processing-dialog {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+        max-width: 360px;
+        padding: 26px;
+        text-align: center;
+        width: min(100%, 360px);
+      }
+      .processing-spinner {
+        animation: spin 0.85s linear infinite;
+        border: 4px solid #d8dee8;
+        border-top-color: var(--accent);
+        border-radius: 999px;
+        height: 44px;
+        margin: 0 auto 16px;
+        width: 44px;
+      }
+      .processing-dialog h2 {
+        margin: 0 0 8px;
+      }
+      .processing-dialog p {
+        color: var(--muted);
+        margin: 0;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
       @media (max-width: 760px) {
         .metric-row {
           grid-template-columns: 1fr;
@@ -1118,9 +1165,23 @@ PAGE_TEMPLATE = """
         </div>
       </div>
     {% endif %}
+    <div id="processing-overlay" class="processing-overlay" role="alertdialog" aria-modal="true" aria-labelledby="processing-title" aria-describedby="processing-description">
+      <div class="processing-dialog">
+        <div class="processing-spinner" aria-hidden="true"></div>
+        <h2 id="processing-title">Processing</h2>
+        <p id="processing-description">Running the model. This may take a moment.</p>
+      </div>
+    </div>
     <script>
       const tabs = document.querySelectorAll(".tab");
       const panels = document.querySelectorAll(".tab-panel");
+      const processingOverlay = document.getElementById("processing-overlay");
+
+      function showProcessingOverlay() {
+        if (processingOverlay) {
+          processingOverlay.classList.add("active");
+        }
+      }
 
       function activateTab(hash) {
         const validTabs = ["#classification", "#regression", "#pro_classification", "#pro_regression"];
@@ -1153,6 +1214,15 @@ PAGE_TEMPLATE = """
         });
       });
 
+      document.querySelectorAll("form[data-run-form]").forEach((form) => {
+        form.addEventListener("submit", () => {
+          if (!form.checkValidity()) {
+            return;
+          }
+          showProcessingOverlay();
+        });
+      });
+
       document.querySelectorAll("[data-threshold-input]").forEach((input) => {
         const output = input.closest(".threshold-control")?.querySelector("[data-threshold-output]");
         const update = () => {
@@ -1168,6 +1238,12 @@ PAGE_TEMPLATE = """
       if (window.location.hash) {
         activateTab(window.location.hash);
       }
+
+      window.addEventListener("pageshow", () => {
+        if (processingOverlay) {
+          processingOverlay.classList.remove("active");
+        }
+      });
     </script>
   </body>
 </html>
