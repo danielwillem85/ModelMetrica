@@ -1130,12 +1130,22 @@ PAGE_TEMPLATE = """
         display: grid;
         gap: 10px 20px;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        list-style-position: outside;
+        list-style: none;
         margin: 18px 0;
-        padding-left: 20px;
+        padding-left: 0;
       }
       .subscription-benefits li {
+        padding-left: 26px;
         padding-right: 6px;
+        position: relative;
+      }
+      .subscription-benefits li::before {
+        color: #0f766e;
+        content: "✓";
+        font-weight: 850;
+        left: 0;
+        position: absolute;
+        top: 0;
       }
       .modal-close {
         background: #f8fafc;
