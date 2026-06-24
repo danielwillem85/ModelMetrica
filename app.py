@@ -5,9 +5,13 @@ from datetime import datetime
 import html
 import json
 import math
+import os
 import sqlite3
 import textwrap
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urljoin
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import matplotlib
@@ -46,6 +50,13 @@ DATASETS = {}
 DOWNLOADS = {}
 DISPLAY_DECIMALS = 3
 DISPLAY_FLOAT_FORMAT = f"{{:.{DISPLAY_DECIMALS}f}}".format
+MOLLIE_API_BASE = "https://api.mollie.com/v2"
+MOLLIE_API_KEY = os.environ.get("MOLLIE_API_KEY", "")
+MOLLIE_BASE_URL = os.environ.get("MOLLIE_BASE_URL", "")
+SUBSCRIPTION_AMOUNT = os.environ.get("MODELMETRICA_SUBSCRIPTION_AMOUNT", "9.99")
+SUBSCRIPTION_CURRENCY = os.environ.get("MODELMETRICA_SUBSCRIPTION_CURRENCY", "EUR")
+SUBSCRIPTION_INTERVAL = os.environ.get("MODELMETRICA_SUBSCRIPTION_INTERVAL", "1 month")
+SUBSCRIPTION_DESCRIPTION = os.environ.get("MODELMETRICA_SUBSCRIPTION_DESCRIPTION", "ModelMetrica Pro subscription")
 
 PAGE_TEMPLATE = """
 {% macro render_classification_tab(tab, active_tab, has_data, columns) %}
@@ -54,7 +65,7 @@ PAGE_TEMPLATE = """
           {% if not has_data %}
             <p class="error">Upload a dataset on the Data tab before running classification.</p>
           {% else %}
-            <form method="post" data-run-form>
+            <form method="post" data-run-form {% if tab.allow_model_comparison %}data-pro-run-form{% endif %}>
               <input type="hidden" name="form_name" value="{{ tab.form_name }}">
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div>
@@ -370,7 +381,7 @@ PAGE_TEMPLATE = """
           {% if not has_data %}
             <p class="error">Upload a dataset on the Data tab before running regression.</p>
           {% else %}
-            <form method="post" data-run-form>
+            <form method="post" data-run-form {% if tab.allow_model_comparison %}data-pro-run-form{% endif %}>
               <input type="hidden" name="form_name" value="{{ tab.form_name }}">
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div>
@@ -717,6 +728,20 @@ PAGE_TEMPLATE = """
       .logout-link:hover {
         border-color: var(--accent);
       }
+      .subscription-status {
+        background: #f8fafc;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 750;
+        padding: 7px 10px;
+      }
+      .subscription-status.active {
+        background: #ccfbf1;
+        border-color: #5eead4;
+        color: #115e59;
+      }
       main {
         width: min(1120px, calc(100% - 40px));
         margin: 0 auto;
@@ -1011,6 +1036,22 @@ PAGE_TEMPLATE = """
       .processing-overlay.active {
         display: flex;
       }
+      .subscription-overlay {
+        align-items: center;
+        background: rgba(15, 23, 42, 0.62);
+        bottom: 0;
+        display: none;
+        justify-content: center;
+        left: 0;
+        padding: 24px;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 1100;
+      }
+      .subscription-overlay.active {
+        display: flex;
+      }
       .processing-dialog {
         background: var(--surface);
         border: 1px solid var(--line);
@@ -1020,6 +1061,39 @@ PAGE_TEMPLATE = """
         padding: 26px;
         text-align: center;
         width: min(100%, 360px);
+      }
+      .subscription-dialog {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
+        max-width: 420px;
+        padding: 28px;
+        position: relative;
+        width: min(100%, 420px);
+      }
+      .subscription-dialog h2 {
+        margin: 0 0 8px;
+      }
+      .subscription-dialog p {
+        color: var(--muted);
+      }
+      .subscription-price {
+        color: var(--ink);
+        font-size: 20px;
+        font-weight: 800;
+      }
+      .modal-close {
+        background: #f8fafc;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        height: 32px;
+        padding: 0;
+        position: absolute;
+        right: 14px;
+        top: 14px;
+        width: 32px;
       }
       .processing-spinner {
         animation: spin 0.85s linear infinite;
@@ -1062,6 +1136,7 @@ PAGE_TEMPLATE = """
         {% if is_authenticated %}
           <div class="user-actions">
             <span>{{ current_username }}</span>
+            <span class="subscription-status {{ 'active' if has_subscription else '' }}">{{ 'Pro active' if has_subscription else 'Free plan' }}</span>
             <a class="logout-link" href="{{ url_for('logout') }}">Log out</a>
           </div>
         {% endif %}
@@ -1172,14 +1247,43 @@ PAGE_TEMPLATE = """
         <p id="processing-description">Running the model. This may take a moment.</p>
       </div>
     </div>
+    <div id="subscription-overlay" class="subscription-overlay" role="dialog" aria-modal="true" aria-labelledby="subscription-title" aria-describedby="subscription-description">
+      <div class="subscription-dialog">
+        <button type="button" class="modal-close" data-close-subscription aria-label="Close subscription popup">x</button>
+        <h2 id="subscription-title">Pro subscription required</h2>
+        <p id="subscription-description">Pro classification and Pro regression require an active subscription.</p>
+        <p class="subscription-price">{{ subscription_price }}</p>
+        {% if mollie_configured %}
+          <form method="post" action="{{ url_for('start_subscription') }}">
+            <button type="submit">Subscribe with Mollie</button>
+          </form>
+        {% else %}
+          <p class="error">Mollie payments are not configured yet. Set MOLLIE_API_KEY to enable checkout.</p>
+        {% endif %}
+      </div>
+    </div>
     <script>
       const tabs = document.querySelectorAll(".tab");
       const panels = document.querySelectorAll(".tab-panel");
       const processingOverlay = document.getElementById("processing-overlay");
+      const subscriptionOverlay = document.getElementById("subscription-overlay");
+      const hasSubscription = {{ 'true' if has_subscription else 'false' }};
 
       function showProcessingOverlay() {
         if (processingOverlay) {
           processingOverlay.classList.add("active");
+        }
+      }
+
+      function showSubscriptionOverlay() {
+        if (subscriptionOverlay) {
+          subscriptionOverlay.classList.add("active");
+        }
+      }
+
+      function hideSubscriptionOverlay() {
+        if (subscriptionOverlay) {
+          subscriptionOverlay.classList.remove("active");
         }
       }
 
@@ -1215,13 +1319,30 @@ PAGE_TEMPLATE = """
       });
 
       document.querySelectorAll("form[data-run-form]").forEach((form) => {
-        form.addEventListener("submit", () => {
+        form.addEventListener("submit", (event) => {
           if (!form.checkValidity()) {
+            return;
+          }
+          if (form.hasAttribute("data-pro-run-form") && !hasSubscription) {
+            event.preventDefault();
+            showSubscriptionOverlay();
             return;
           }
           showProcessingOverlay();
         });
       });
+
+      document.querySelectorAll("[data-close-subscription]").forEach((button) => {
+        button.addEventListener("click", hideSubscriptionOverlay);
+      });
+
+      if (subscriptionOverlay) {
+        subscriptionOverlay.addEventListener("click", (event) => {
+          if (event.target === subscriptionOverlay) {
+            hideSubscriptionOverlay();
+          }
+        });
+      }
 
       document.querySelectorAll("[data-threshold-input]").forEach((input) => {
         const output = input.closest(".threshold-control")?.querySelector("[data-threshold-output]");
@@ -1260,6 +1381,12 @@ def get_db_connection():
     return connection
 
 
+def ensure_column(connection, table_name, column_name, definition):
+    columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    if column_name not in columns:
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
+
 def init_auth_db():
     with get_db_connection() as connection:
         connection.execute(
@@ -1272,6 +1399,10 @@ def init_auth_db():
             )
             """
         )
+        ensure_column(connection, "users", "subscription_status", "TEXT NOT NULL DEFAULT 'inactive'")
+        ensure_column(connection, "users", "mollie_customer_id", "TEXT")
+        ensure_column(connection, "users", "mollie_subscription_id", "TEXT")
+        ensure_column(connection, "users", "subscription_updated_at", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS datasets (
@@ -1300,6 +1431,22 @@ def init_auth_db():
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_pro_runs_lookup ON pro_runs (user_id, dataset_id, tab_name, id DESC)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscription_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                mollie_payment_id TEXT NOT NULL UNIQUE,
+                mollie_customer_id TEXT,
+                mollie_subscription_id TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                checkout_url TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
         )
 
 
