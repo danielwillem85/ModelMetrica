@@ -10,7 +10,7 @@ import sqlite3
 import textwrap
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -38,7 +38,21 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from werkzeug.security import check_password_hash, generate_password_hash
-from dotenv import load_dotenv
+
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv():
+        env_path = Path(".env")
+        if not env_path.exists():
+            return
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 load_dotenv()
@@ -746,6 +760,28 @@ PAGE_TEMPLATE = """
         border-color: #5eead4;
         color: #115e59;
       }
+      .subscription-banner {
+        align-items: center;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--accent);
+        border-radius: 8px;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin: 20px 0 0;
+        padding: 14px 16px;
+      }
+      .subscription-banner strong {
+        display: block;
+        margin-bottom: 3px;
+      }
+      .subscription-banner p {
+        margin: 0;
+      }
+      .subscription-banner .subscription-status {
+        flex: 0 0 auto;
+      }
       main {
         width: min(1120px, calc(100% - 40px));
         margin: 0 auto;
@@ -1130,6 +1166,10 @@ PAGE_TEMPLATE = """
         .auth-grid {
           grid-template-columns: 1fr;
         }
+        .subscription-banner {
+          align-items: flex-start;
+          flex-direction: column;
+        }
       }
     </style>
   </head>
@@ -1150,6 +1190,13 @@ PAGE_TEMPLATE = """
     <main>
       <h1>Modeling workspace</h1>
       <p>Upload a CSV or Excel file, inspect the first rows, then run classification or regression analysis.</p>
+      <div class="subscription-banner">
+        <div>
+          <strong>Subscription status</strong>
+          <p>{{ 'Your Pro subscription is active. Pro classification and Pro regression are unlocked.' if has_subscription else 'You are on the free plan. Pro classification and Pro regression require a subscription.' }}</p>
+        </div>
+        <span class="subscription-status {{ 'active' if has_subscription else '' }}">{{ 'Pro active' if has_subscription else 'Free plan' }}</span>
+      </div>
 
       <nav class="tabs">
         <a class="tab {{ 'active' if active_tab == 'data' else '' }}" href="#data">Data</a>
@@ -1262,7 +1309,7 @@ PAGE_TEMPLATE = """
             <button type="submit">Subscribe with Mollie</button>
           </form>
         {% else %}
-          <p class="error">Mollie payments are not configured yet. Set MOLLIE_API_KEY to enable checkout.</p>
+          <p class="error">Mollie payments are not configured yet. Set MOLLIE_API_KEY and a public MOLLIE_BASE_URL to enable checkout.</p>
         {% endif %}
       </div>
     </div>
@@ -1550,11 +1597,17 @@ def user_has_subscription(user=None):
 
 
 def mollie_configured():
-    return bool(MOLLIE_API_KEY) and mollie_api_key_valid()
+    return bool(MOLLIE_API_KEY) and mollie_api_key_valid() and mollie_webhook_url_valid()
 
 
 def mollie_api_key_valid():
     return MOLLIE_API_KEY.startswith(("test_", "live_"))
+
+
+def mollie_webhook_url_valid():
+    webhook_url = external_url_for("mollie_webhook")
+    parsed = urlparse(webhook_url)
+    return parsed.scheme in {"http", "https"} and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
 
 
 def external_url_for(endpoint, **values):
@@ -1568,6 +1621,8 @@ def mollie_request(method, path, payload=None):
         raise RuntimeError("Mollie API key is not configured.")
     if not mollie_api_key_valid():
         raise RuntimeError("MOLLIE_API_KEY must be a Mollie profile API key that starts with test_ or live_.")
+    if not mollie_webhook_url_valid():
+        raise RuntimeError("MOLLIE_BASE_URL must be a public URL that Mollie can reach for webhooks, for example an ngrok HTTPS URL.")
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request_obj = Request(
         f"{MOLLIE_API_BASE}{path}",
