@@ -6,7 +6,6 @@ import html
 import json
 import math
 import os
-import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -32,9 +31,18 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier, plot_tree
-from werkzeug.security import check_password_hash, generate_password_hash
 
-from email_notifications import send_registration_email, send_subscription_success_email
+from auth import (
+    authenticate_user,
+    create_user,
+    current_user,
+    current_user_id,
+    is_user_authenticated,
+    log_user_in,
+    user_has_subscription,
+)
+from db import get_db_connection, init_auth_db
+from email_notifications import send_subscription_success_email
 from payments import PaymentService, SUBSCRIPTION_AMOUNT, SUBSCRIPTION_CURRENCY, SUBSCRIPTION_INTERVAL
 from reports import ReportRenderer
 
@@ -62,7 +70,6 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.secret_key = "dev-secret-change-me"
 
 ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx"}
-DB_PATH = Path(__file__).with_name("modelmetrica_users.sqlite3")
 DATASETS = {}
 DOWNLOADS = {}
 DISPLAY_DECIMALS = 3
@@ -71,125 +78,6 @@ DISPLAY_FLOAT_FORMAT = f"{{:.{DISPLAY_DECIMALS}f}}".format
 
 def allowed_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
-
-
-def get_db_connection():
-    connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def ensure_column(connection, table_name, column_name, definition):
-    columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()}
-    if column_name not in columns:
-        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
-
-
-def init_auth_db():
-    with get_db_connection() as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        ensure_column(connection, "users", "subscription_status", "TEXT NOT NULL DEFAULT 'inactive'")
-        ensure_column(connection, "users", "mollie_customer_id", "TEXT")
-        ensure_column(connection, "users", "mollie_subscription_id", "TEXT")
-        ensure_column(connection, "users", "subscription_updated_at", "TEXT")
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS datasets (
-                id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                filename TEXT NOT NULL,
-                csv_data TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pro_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                dataset_id TEXT NOT NULL,
-                tab_name TEXT NOT NULL,
-                snapshot_json TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                FOREIGN KEY (dataset_id) REFERENCES datasets(id)
-            )
-            """
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pro_runs_lookup ON pro_runs (user_id, dataset_id, tab_name, id DESC)"
-        )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS subscription_payments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                mollie_payment_id TEXT NOT NULL UNIQUE,
-                mollie_customer_id TEXT,
-                mollie_subscription_id TEXT,
-                status TEXT NOT NULL DEFAULT 'open',
-                checkout_url TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-            """
-        )
-
-
-def find_user(username):
-    with get_db_connection() as connection:
-        return connection.execute(
-            "SELECT id, username, password_hash FROM users WHERE lower(username) = lower(?)",
-            (username,),
-        ).fetchone()
-
-
-def create_user(username, password):
-    username = username.strip()
-    if len(username) < 3:
-        raise ValueError("Username must be at least 3 characters.")
-    if len(password) < 6:
-        raise ValueError("Password must be at least 6 characters.")
-    if find_user(username):
-        raise ValueError("That username is already taken.")
-
-    password_hash = generate_password_hash(password)
-    with get_db_connection() as connection:
-        cursor = connection.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-            (username, password_hash),
-        )
-        user_id = cursor.lastrowid
-    send_registration_email(user_id, username)
-    return user_id
-
-
-def authenticate_user(username, password):
-    user = find_user(username.strip())
-    if user is None or not check_password_hash(user["password_hash"], password):
-        return None
-    return user
-
-
-def log_user_in(user_id, username):
-    session["user_id"] = user_id
-    session["username"] = username
-
-
-def is_user_authenticated():
-    return bool(session.get("user_id"))
 
 
 init_auth_db()
@@ -226,23 +114,6 @@ def simulate_test_data(row_count=1000):
             "feature_4": x4,
         }
     )
-
-
-def current_user_id():
-    return session.get("user_id")
-
-
-def current_user():
-    user_id = current_user_id()
-    if not user_id:
-        return None
-    with get_db_connection() as connection:
-        return connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-
-
-def user_has_subscription(user=None):
-    user = user or current_user()
-    return bool(user and user["subscription_status"] == "active")
 
 
 payment_service = PaymentService(get_db_connection, url_for, send_subscription_success_email)
