@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import pandas as pd
-from flask import Flask, Response, redirect, render_template_string, request, session, url_for
+from flask import Flask, Response, redirect, render_template, request, session, url_for
 from sklearn.ensemble import (
     GradientBoostingClassifier,
     GradientBoostingRegressor,
@@ -101,1417 +101,6 @@ def create_api_ssl_context():
             ssl_context.load_verify_locations(cadata="\n".join(windows_certs))
     return ssl_context
 
-PAGE_TEMPLATE = """
-{% macro render_classification_tab(tab, active_tab, has_data, columns) %}
-      <section id="{{ tab.id }}" class="tab-panel {{ 'active' if active_tab == tab.id else '' }}">
-        <div class="panel">
-          {% if not has_data %}
-            <p class="error">Upload a dataset on the Data tab before running classification.</p>
-          {% else %}
-            <form method="post" data-run-form {% if tab.allow_model_comparison %}data-pro-run-form{% endif %}>
-              <input type="hidden" name="form_name" value="{{ tab.form_name }}">
-              <input type="hidden" name="active_tab" value="{{ tab.id }}">
-              <div>
-                <label for="{{ tab.model_field }}">Model type</label>
-                <select id="{{ tab.model_field }}" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple{% endif %} required>
-                  <option value="logistic" {{ 'selected' if 'logistic' in tab.selected_models else '' }}>Logistic regression</option>
-                  <option value="tree" {{ 'selected' if 'tree' in tab.selected_models else '' }}>Tree model</option>
-                  <option value="random_forest" {{ 'selected' if 'random_forest' in tab.selected_models else '' }}>Random Forest</option>
-                  <option value="gradient_boosting" {{ 'selected' if 'gradient_boosting' in tab.selected_models else '' }}>Gradient Boosting</option>
-                  <option value="svm" {{ 'selected' if 'svm' in tab.selected_models else '' }}>Support Vector Machine</option>
-                  <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN</option>
-                </select>
-              </div>
-              {% if tab.allow_model_comparison %}
-              <div>
-                <label for="{{ tab.detail_model_field }}">Detail model</label>
-                <select id="{{ tab.detail_model_field }}" name="{{ tab.detail_model_field }}" required>
-                  <option value="best" {{ 'selected' if tab.selected_detail_model == 'best' else '' }}>Auto best</option>
-                  <option value="logistic" {{ 'selected' if tab.selected_detail_model == 'logistic' else '' }}>Logistic regression</option>
-                  <option value="tree" {{ 'selected' if tab.selected_detail_model == 'tree' else '' }}>Tree model</option>
-                  <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest</option>
-                  <option value="gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'gradient_boosting' else '' }}>Gradient Boosting</option>
-                  <option value="svm" {{ 'selected' if tab.selected_detail_model == 'svm' else '' }}>Support Vector Machine</option>
-                  <option value="knn" {{ 'selected' if tab.selected_detail_model == 'knn' else '' }}>kNN</option>
-                </select>
-              </div>
-              {% endif %}
-              <div>
-                <label for="{{ tab.target_field }}">Target column</label>
-                <select id="{{ tab.target_field }}" name="{{ tab.target_field }}" required>
-                  {% for column in columns %}
-                    <option value="{{ column }}" {{ 'selected' if column == tab.selected_target else '' }}>{{ column }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.predictors_field }}">Predictor columns</label>
-                <select id="{{ tab.predictors_field }}" name="{{ tab.predictors_field }}" multiple required>
-                  {% for column in columns %}
-                    <option value="{{ column }}" {{ 'selected' if column in tab.selected_predictors else '' }}>{{ column }}</option>
-                  {% endfor %}
-                </select>
-                <p>Select one or more predictors. Logistic regression requires exactly two target classes.</p>
-              </div>
-              <div>
-                <label for="{{ tab.test_size_field }}">Test set size</label>
-                <select id="{{ tab.test_size_field }}" name="{{ tab.test_size_field }}" required>
-                  <option value="0.2" {{ 'selected' if tab.selected_test_size == 0.2 else '' }}>20%</option>
-                  <option value="0.25" {{ 'selected' if tab.selected_test_size == 0.25 else '' }}>25%</option>
-                  <option value="0.3" {{ 'selected' if tab.selected_test_size == 0.3 else '' }}>30%</option>
-                  <option value="0.4" {{ 'selected' if tab.selected_test_size == 0.4 else '' }}>40%</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.cv_folds_field }}">Cross-validation</label>
-                <select id="{{ tab.cv_folds_field }}" name="{{ tab.cv_folds_field }}" required>
-                  <option value="0" {{ 'selected' if tab.selected_cv_folds == 0 else '' }}>Off</option>
-                  <option value="3" {{ 'selected' if tab.selected_cv_folds == 3 else '' }}>3 folds</option>
-                  <option value="5" {{ 'selected' if tab.selected_cv_folds == 5 else '' }}>5 folds</option>
-                  <option value="10" {{ 'selected' if tab.selected_cv_folds == 10 else '' }}>10 folds</option>
-                </select>
-              </div>
-              {% if tab.allow_model_comparison %}
-              <div>
-                <label for="{{ tab.missing_values_field }}">Missing values</label>
-                <select id="{{ tab.missing_values_field }}" name="{{ tab.missing_values_field }}" required>
-                  <option value="drop" {{ 'selected' if tab.selected_missing_values == 'drop' else '' }}>Drop incomplete rows</option>
-                  <option value="impute_mean_mode" {{ 'selected' if tab.selected_missing_values == 'impute_mean_mode' else '' }}>Impute mean/mode</option>
-                  <option value="impute_median_mode" {{ 'selected' if tab.selected_missing_values == 'impute_median_mode' else '' }}>Impute median/mode</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.categorical_encoding_field }}">Categorical encoding</label>
-                <select id="{{ tab.categorical_encoding_field }}" name="{{ tab.categorical_encoding_field }}" required>
-                  <option value="one_hot_drop_first" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_drop_first' else '' }}>One-hot, drop first</option>
-                  <option value="one_hot_full" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_full' else '' }}>One-hot, all levels</option>
-                  <option value="ordinal" {{ 'selected' if tab.selected_categorical_encoding == 'ordinal' else '' }}>Ordinal codes</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.scaling_field }}">Feature scaling</label>
-                <select id="{{ tab.scaling_field }}" name="{{ tab.scaling_field }}" required>
-                  <option value="on" {{ 'selected' if tab.selected_scaling == 'on' else '' }}>On</option>
-                  <option value="off" {{ 'selected' if tab.selected_scaling == 'off' else '' }}>Off</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.split_seed_field }}">Split seed</label>
-                <input id="{{ tab.split_seed_field }}" name="{{ tab.split_seed_field }}" type="number" min="0" max="999999" step="1" value="{{ tab.selected_split_seed }}" required>
-              </div>
-              <div>
-                <label for="{{ tab.outlier_handling_field }}">Outliers</label>
-                <select id="{{ tab.outlier_handling_field }}" name="{{ tab.outlier_handling_field }}" required>
-                  <option value="none" {{ 'selected' if tab.selected_outlier_handling == 'none' else '' }}>No handling</option>
-                  <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
-                  <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.tuning_mode_field }}">Hyperparameter tuning</label>
-                <select id="{{ tab.tuning_mode_field }}" name="{{ tab.tuning_mode_field }}" required>
-                  <option value="off" {{ 'selected' if tab.selected_tuning_mode == 'off' else '' }}>Off</option>
-                  <option value="grid" {{ 'selected' if tab.selected_tuning_mode == 'grid' else '' }}>Grid search</option>
-                  <option value="random" {{ 'selected' if tab.selected_tuning_mode == 'random' else '' }}>Random search</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.tuning_iterations_field }}">Random search iterations</label>
-                <input id="{{ tab.tuning_iterations_field }}" name="{{ tab.tuning_iterations_field }}" type="number" min="3" max="30" step="1" value="{{ tab.selected_tuning_iterations }}" required>
-              </div>
-              {% if tab.threshold_field %}
-              <div>
-                <label for="{{ tab.threshold_field }}">Decision threshold</label>
-                <div class="threshold-control">
-                  <input id="{{ tab.threshold_field }}" name="{{ tab.threshold_field }}" type="range" min="0.05" max="0.95" step="0.001" value="{{ '%.3f'|format(tab.selected_threshold) }}" data-threshold-input>
-                  <output for="{{ tab.threshold_field }}" data-threshold-output>{{ '%.3f'|format(tab.selected_threshold) }}</output>
-                </div>
-              </div>
-              {% endif %}
-              {% endif %}
-              <div>
-                <button type="submit">Run</button>
-              </div>
-            </form>
-          {% endif %}
-          {% if tab.error %}
-            <p class="error">{{ tab.error }}</p>
-          {% endif %}
-        </div>
-
-        {% if tab.run_history %}
-          <div class="panel">
-            <h2>Recent Pro runs</h2>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Target</th>
-                    <th>Models</th>
-                    <th>Detail</th>
-                    <th>Summary</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for run in tab.run_history %}
-                    <tr>
-                      <td>{{ run.timestamp }}</td>
-                      <td>{{ run.target }}</td>
-                      <td>{{ run.models }}</td>
-                      <td>{{ run.detail_model }}</td>
-                      <td>{{ run.summary }}</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        {% endif %}
-        {% if tab.comparison_html %}
-          <div class="panel">
-            <h2>Model comparison</h2>
-            <p>Detailed results below show the selected detail model, or the best model when Auto best is chosen.</p>
-            {% if tab.comparison_download %}
-              <div class="download-links">
-                <a href="{{ tab.comparison_download.href }}">{{ tab.comparison_download.label }}</a>
-              </div>
-            {% endif %}
-            <div class="table-wrap">
-              {{ tab.comparison_html|safe }}
-            </div>
-            {% if tab.detail_metric_comparison_html %}
-              <h3>Selected model tuning comparison</h3>
-              <div class="table-wrap">
-                {{ tab.detail_metric_comparison_html|safe }}
-              </div>
-            {% endif %}
-          </div>
-        {% endif %}
-        {% if tab.output %}
-          {% if tab.recommendation %}
-            <div class="panel recommendation-panel">
-              <h2>Model recommendation</h2>
-              <p><strong>{{ tab.recommendation.title }}</strong></p>
-              <p>{{ tab.recommendation.summary }}</p>
-              <div class="recommendation-grid">
-                <div>
-                  <h3>Evidence</h3>
-                  <ul>
-                    {% for item in tab.recommendation.evidence %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-                <div>
-                  <h3>Concerns</h3>
-                  <ul>
-                    {% for item in tab.recommendation.concerns %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-                <div>
-                  <h3>Next actions</h3>
-                  <ul>
-                    {% for item in tab.recommendation.actions %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          {% endif %}
-          <div class="panel">
-            <h2>{{ tab.output.title }}</h2>
-            <p>{{ tab.output.description }}</p>
-            {% if tab.output.downloads or tab.report_download or tab.report_pdf_download %}
-              <div class="download-links">
-                {% if tab.report_download %}
-                  <a href="{{ tab.report_download.href }}">{{ tab.report_download.label }}</a>
-                {% endif %}
-                {% if tab.report_pdf_download %}
-                  <a href="{{ tab.report_pdf_download.href }}">{{ tab.report_pdf_download.label }}</a>
-                {% endif %}
-                {% for download in tab.output.downloads %}
-                  <a href="{{ download.href }}">{{ download.label }}</a>
-                {% endfor %}
-              </div>
-            {% endif %}
-            <div class="metric-row">
-              {% for metric in tab.output.metrics %}
-                <div class="metric"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
-              {% endfor %}
-            </div>
-            {% if tab.output.coefficients_html %}
-              <h3>Coefficients</h3>
-              <div class="table-wrap">
-                {{ tab.output.coefficients_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.importances_html %}
-              <h3>Variable importance</h3>
-              <div class="table-wrap">
-                {{ tab.output.importances_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.details_html %}
-              <h3>Model details</h3>
-              <div class="table-wrap">
-                {{ tab.output.details_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.cv_summary_html or tab.output.cv_diagnostics_html or tab.output.cv_plot %}
-              <h3>Cross-validation diagnostics</h3>
-              {% if tab.output.cv_plot %}
-                <div class="tree-plot">
-                  <img src="data:image/png;base64,{{ tab.output.cv_plot }}" alt="Cross-validation fold score plot">
-                </div>
-              {% endif %}
-              {% if tab.output.cv_summary_html %}
-                <div class="table-wrap">
-                  {{ tab.output.cv_summary_html|safe }}
-                </div>
-              {% endif %}
-              {% if tab.output.cv_diagnostics_html %}
-                <div class="table-wrap">
-                  {{ tab.output.cv_diagnostics_html|safe }}
-                </div>
-              {% endif %}
-            {% endif %}
-            <h3>Confusion matrix</h3>
-            <div class="table-wrap">
-              {{ tab.output.confusion_html|safe }}
-            </div>
-            {% if tab.output.roc_plot %}
-              <h3>ROC curve</h3>
-              <div class="tree-plot">
-                <img src="data:image/png;base64,{{ tab.output.roc_plot }}" alt="ROC curve">
-              </div>
-            {% endif %}
-            {% if tab.output.pr_plot %}
-              <h3>Precision-recall curve</h3>
-              <div class="tree-plot">
-                <img src="data:image/png;base64,{{ tab.output.pr_plot }}" alt="Precision-recall curve">
-              </div>
-            {% endif %}
-            {% if tab.output.selected_threshold_html %}
-              <h3>Selected threshold metrics</h3>
-              <div class="table-wrap">
-                {{ tab.output.selected_threshold_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.threshold_html %}
-              <h3>Threshold analysis</h3>
-              <div class="table-wrap">
-                {{ tab.output.threshold_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.tree_plot %}
-              <h3>Tree structure</h3>
-              <div class="tree-plot">
-                <img src="data:image/png;base64,{{ tab.output.tree_plot }}" alt="Classification tree plot">
-              </div>
-            {% endif %}
-          </div>
-        {% endif %}
-      </section>
-{% endmacro %}
-
-{% macro render_regression_tab(tab, active_tab, has_data, columns) %}
-      <section id="{{ tab.id }}" class="tab-panel {{ 'active' if active_tab == tab.id else '' }}">
-        <div class="panel">
-          {% if not has_data %}
-            <p class="error">Upload a dataset on the Data tab before running regression.</p>
-          {% else %}
-            <form method="post" data-run-form {% if tab.allow_model_comparison %}data-pro-run-form{% endif %}>
-              <input type="hidden" name="form_name" value="{{ tab.form_name }}">
-              <input type="hidden" name="active_tab" value="{{ tab.id }}">
-              <div>
-                <label for="{{ tab.model_field }}">Model type</label>
-                <select id="{{ tab.model_field }}" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple{% endif %} required>
-                  <option value="linear" {{ 'selected' if 'linear' in tab.selected_models else '' }}>Linear Regression</option>
-                  <option value="ridge" {{ 'selected' if 'ridge' in tab.selected_models else '' }}>Ridge Regression</option>
-                  <option value="lasso" {{ 'selected' if 'lasso' in tab.selected_models else '' }}>Lasso Regression</option>
-                  <option value="random_forest" {{ 'selected' if 'random_forest' in tab.selected_models else '' }}>Random Forest Regression</option>
-                  <option value="gradient_boosting" {{ 'selected' if 'gradient_boosting' in tab.selected_models else '' }}>Gradient Boosting Regression</option>
-                  <option value="svr" {{ 'selected' if 'svr' in tab.selected_models else '' }}>Support Vector Regression</option>
-                  <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN Regression</option>
-                </select>
-              </div>
-              {% if tab.allow_model_comparison %}
-              <div>
-                <label for="{{ tab.detail_model_field }}">Detail model</label>
-                <select id="{{ tab.detail_model_field }}" name="{{ tab.detail_model_field }}" required>
-                  <option value="best" {{ 'selected' if tab.selected_detail_model == 'best' else '' }}>Auto best</option>
-                  <option value="linear" {{ 'selected' if tab.selected_detail_model == 'linear' else '' }}>Linear Regression</option>
-                  <option value="ridge" {{ 'selected' if tab.selected_detail_model == 'ridge' else '' }}>Ridge Regression</option>
-                  <option value="lasso" {{ 'selected' if tab.selected_detail_model == 'lasso' else '' }}>Lasso Regression</option>
-                  <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest Regression</option>
-                  <option value="gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'gradient_boosting' else '' }}>Gradient Boosting Regression</option>
-                  <option value="svr" {{ 'selected' if tab.selected_detail_model == 'svr' else '' }}>Support Vector Regression</option>
-                  <option value="knn" {{ 'selected' if tab.selected_detail_model == 'knn' else '' }}>kNN Regression</option>
-                </select>
-              </div>
-              {% endif %}
-              <div>
-                <label for="{{ tab.target_field }}">Numeric target column</label>
-                <select id="{{ tab.target_field }}" name="{{ tab.target_field }}" required>
-                  {% for column in columns %}
-                    <option value="{{ column }}" {{ 'selected' if column == tab.selected_target else '' }}>{{ column }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.predictors_field }}">Predictor columns</label>
-                <select id="{{ tab.predictors_field }}" name="{{ tab.predictors_field }}" multiple required>
-                  {% for column in columns %}
-                    <option value="{{ column }}" {{ 'selected' if column in tab.selected_predictors else '' }}>{{ column }}</option>
-                  {% endfor %}
-                </select>
-                <p>Select one or more predictors. Categorical predictors are automatically encoded.</p>
-              </div>
-              <div>
-                <label for="{{ tab.test_size_field }}">Test set size</label>
-                <select id="{{ tab.test_size_field }}" name="{{ tab.test_size_field }}" required>
-                  <option value="0.2" {{ 'selected' if tab.selected_test_size == 0.2 else '' }}>20%</option>
-                  <option value="0.25" {{ 'selected' if tab.selected_test_size == 0.25 else '' }}>25%</option>
-                  <option value="0.3" {{ 'selected' if tab.selected_test_size == 0.3 else '' }}>30%</option>
-                  <option value="0.4" {{ 'selected' if tab.selected_test_size == 0.4 else '' }}>40%</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.cv_folds_field }}">Cross-validation</label>
-                <select id="{{ tab.cv_folds_field }}" name="{{ tab.cv_folds_field }}" required>
-                  <option value="0" {{ 'selected' if tab.selected_cv_folds == 0 else '' }}>Off</option>
-                  <option value="3" {{ 'selected' if tab.selected_cv_folds == 3 else '' }}>3 folds</option>
-                  <option value="5" {{ 'selected' if tab.selected_cv_folds == 5 else '' }}>5 folds</option>
-                  <option value="10" {{ 'selected' if tab.selected_cv_folds == 10 else '' }}>10 folds</option>
-                </select>
-              </div>
-              {% if tab.allow_model_comparison %}
-              <div>
-                <label for="{{ tab.missing_values_field }}">Missing values</label>
-                <select id="{{ tab.missing_values_field }}" name="{{ tab.missing_values_field }}" required>
-                  <option value="drop" {{ 'selected' if tab.selected_missing_values == 'drop' else '' }}>Drop incomplete rows</option>
-                  <option value="impute_mean_mode" {{ 'selected' if tab.selected_missing_values == 'impute_mean_mode' else '' }}>Impute mean/mode</option>
-                  <option value="impute_median_mode" {{ 'selected' if tab.selected_missing_values == 'impute_median_mode' else '' }}>Impute median/mode</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.categorical_encoding_field }}">Categorical encoding</label>
-                <select id="{{ tab.categorical_encoding_field }}" name="{{ tab.categorical_encoding_field }}" required>
-                  <option value="one_hot_drop_first" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_drop_first' else '' }}>One-hot, drop first</option>
-                  <option value="one_hot_full" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_full' else '' }}>One-hot, all levels</option>
-                  <option value="ordinal" {{ 'selected' if tab.selected_categorical_encoding == 'ordinal' else '' }}>Ordinal codes</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.scaling_field }}">Feature scaling</label>
-                <select id="{{ tab.scaling_field }}" name="{{ tab.scaling_field }}" required>
-                  <option value="on" {{ 'selected' if tab.selected_scaling == 'on' else '' }}>On</option>
-                  <option value="off" {{ 'selected' if tab.selected_scaling == 'off' else '' }}>Off</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.split_seed_field }}">Split seed</label>
-                <input id="{{ tab.split_seed_field }}" name="{{ tab.split_seed_field }}" type="number" min="0" max="999999" step="1" value="{{ tab.selected_split_seed }}" required>
-              </div>
-              <div>
-                <label for="{{ tab.outlier_handling_field }}">Outliers</label>
-                <select id="{{ tab.outlier_handling_field }}" name="{{ tab.outlier_handling_field }}" required>
-                  <option value="none" {{ 'selected' if tab.selected_outlier_handling == 'none' else '' }}>No handling</option>
-                  <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
-                  <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.tuning_mode_field }}">Hyperparameter tuning</label>
-                <select id="{{ tab.tuning_mode_field }}" name="{{ tab.tuning_mode_field }}" required>
-                  <option value="off" {{ 'selected' if tab.selected_tuning_mode == 'off' else '' }}>Off</option>
-                  <option value="grid" {{ 'selected' if tab.selected_tuning_mode == 'grid' else '' }}>Grid search</option>
-                  <option value="random" {{ 'selected' if tab.selected_tuning_mode == 'random' else '' }}>Random search</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.tuning_iterations_field }}">Random search iterations</label>
-                <input id="{{ tab.tuning_iterations_field }}" name="{{ tab.tuning_iterations_field }}" type="number" min="3" max="30" step="1" value="{{ tab.selected_tuning_iterations }}" required>
-              </div>
-              {% endif %}
-              <div>
-                <button type="submit">Run</button>
-              </div>
-            </form>
-          {% endif %}
-          {% if tab.error %}
-            <p class="error">{{ tab.error }}</p>
-          {% endif %}
-        </div>
-
-        {% if tab.run_history %}
-          <div class="panel">
-            <h2>Recent Pro runs</h2>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Target</th>
-                    <th>Models</th>
-                    <th>Detail</th>
-                    <th>Summary</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for run in tab.run_history %}
-                    <tr>
-                      <td>{{ run.timestamp }}</td>
-                      <td>{{ run.target }}</td>
-                      <td>{{ run.models }}</td>
-                      <td>{{ run.detail_model }}</td>
-                      <td>{{ run.summary }}</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        {% endif %}
-        {% if tab.comparison_html %}
-          <div class="panel">
-            <h2>Model comparison</h2>
-            <p>Detailed results below show the selected detail model, or the best model when Auto best is chosen.</p>
-            {% if tab.comparison_download %}
-              <div class="download-links">
-                <a href="{{ tab.comparison_download.href }}">{{ tab.comparison_download.label }}</a>
-              </div>
-            {% endif %}
-            <div class="table-wrap">
-              {{ tab.comparison_html|safe }}
-            </div>
-            {% if tab.detail_metric_comparison_html %}
-              <h3>Selected model tuning comparison</h3>
-              <div class="table-wrap">
-                {{ tab.detail_metric_comparison_html|safe }}
-              </div>
-            {% endif %}
-          </div>
-        {% endif %}
-        {% if tab.output %}
-          {% if tab.recommendation %}
-            <div class="panel recommendation-panel">
-              <h2>Model recommendation</h2>
-              <p><strong>{{ tab.recommendation.title }}</strong></p>
-              <p>{{ tab.recommendation.summary }}</p>
-              <div class="recommendation-grid">
-                <div>
-                  <h3>Evidence</h3>
-                  <ul>
-                    {% for item in tab.recommendation.evidence %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-                <div>
-                  <h3>Concerns</h3>
-                  <ul>
-                    {% for item in tab.recommendation.concerns %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-                <div>
-                  <h3>Next actions</h3>
-                  <ul>
-                    {% for item in tab.recommendation.actions %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          {% endif %}
-          <div class="panel">
-            <h2>{{ tab.output.title }}</h2>
-            <p>{{ tab.output.description }}</p>
-            {% if tab.output.downloads or tab.report_download or tab.report_pdf_download %}
-              <div class="download-links">
-                {% if tab.report_download %}
-                  <a href="{{ tab.report_download.href }}">{{ tab.report_download.label }}</a>
-                {% endif %}
-                {% if tab.report_pdf_download %}
-                  <a href="{{ tab.report_pdf_download.href }}">{{ tab.report_pdf_download.label }}</a>
-                {% endif %}
-                {% for download in tab.output.downloads %}
-                  <a href="{{ download.href }}">{{ download.label }}</a>
-                {% endfor %}
-              </div>
-            {% endif %}
-            <div class="metric-row">
-              {% for metric in tab.output.metrics %}
-                <div class="metric"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
-              {% endfor %}
-            </div>
-            {% if tab.output.coefficients_html %}
-              <h3>Coefficients</h3>
-              <div class="table-wrap">
-                {{ tab.output.coefficients_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.importances_html %}
-              <h3>Variable importance</h3>
-              <div class="table-wrap">
-                {{ tab.output.importances_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.details_html %}
-              <h3>Model details</h3>
-              <div class="table-wrap">
-                {{ tab.output.details_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.cv_summary_html or tab.output.cv_diagnostics_html or tab.output.cv_plot %}
-              <h3>Cross-validation diagnostics</h3>
-              {% if tab.output.cv_plot %}
-                <div class="tree-plot">
-                  <img src="data:image/png;base64,{{ tab.output.cv_plot }}" alt="Cross-validation fold score plot">
-                </div>
-              {% endif %}
-              {% if tab.output.cv_summary_html %}
-                <div class="table-wrap">
-                  {{ tab.output.cv_summary_html|safe }}
-                </div>
-              {% endif %}
-              {% if tab.output.cv_diagnostics_html %}
-                <div class="table-wrap">
-                  {{ tab.output.cv_diagnostics_html|safe }}
-                </div>
-              {% endif %}
-            {% endif %}
-            {% if tab.output.predicted_actual_plot %}
-              <h3>Predicted vs actual</h3>
-              <div class="tree-plot">
-                <img src="data:image/png;base64,{{ tab.output.predicted_actual_plot }}" alt="Predicted vs actual plot">
-              </div>
-            {% endif %}
-            {% if tab.output.residuals_fitted_plot %}
-              <h3>Residuals vs fitted</h3>
-              <div class="tree-plot">
-                <img src="data:image/png;base64,{{ tab.output.residuals_fitted_plot }}" alt="Residuals vs fitted plot">
-              </div>
-            {% endif %}
-            {% if tab.output.residual_distribution_plot %}
-              <h3>Residual distribution</h3>
-              <div class="tree-plot">
-                <img src="data:image/png;base64,{{ tab.output.residual_distribution_plot }}" alt="Residual distribution plot">
-              </div>
-            {% endif %}
-            {% if tab.output.residual_diagnostics_html %}
-              <h3>Residual diagnostics</h3>
-              <div class="table-wrap">
-                {{ tab.output.residual_diagnostics_html|safe }}
-              </div>
-            {% endif %}
-          </div>
-        {% endif %}
-      </section>
-{% endmacro %}
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ModelMetrica</title>
-    <style>
-      :root {
-        --ink: #1f2933;
-        --muted: #64748b;
-        --line: #d8dee8;
-        --surface: #ffffff;
-        --page: #f5f7fa;
-        --accent: #176b87;
-        --accent-dark: #0f4f63;
-        --danger: #b42318;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        background: var(--page);
-        color: var(--ink);
-        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      header {
-        background: var(--surface);
-        border-bottom: 1px solid var(--line);
-        padding: 20px 28px;
-      }
-      .header-content {
-        align-items: center;
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-      }
-      .brand {
-        font-size: 22px;
-        font-weight: 750;
-      }
-      .user-actions {
-        align-items: center;
-        display: flex;
-        gap: 12px;
-      }
-      .logout-link {
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        color: var(--accent-dark);
-        font-weight: 650;
-        padding: 9px 12px;
-        text-decoration: none;
-      }
-      .logout-link:hover {
-        border-color: var(--accent);
-      }
-      .subscription-status {
-        background: #f8fafc;
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        color: var(--muted);
-        font-size: 13px;
-        font-weight: 750;
-        padding: 7px 10px;
-      }
-      .subscription-status.active {
-        background: #ccfbf1;
-        border-color: #5eead4;
-        color: #115e59;
-      }
-      .subscription-banner {
-        align-items: center;
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-left: 4px solid var(--accent);
-        border-radius: 8px;
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-        margin: 20px 0 0;
-        padding: 14px 16px;
-      }
-      .subscription-banner strong {
-        display: block;
-        margin-bottom: 3px;
-      }
-      .subscription-banner p {
-        margin: 0;
-      }
-      .subscription-banner .subscription-status {
-        flex: 0 0 auto;
-      }
-      .subscription-actions {
-        align-items: center;
-        display: flex;
-        flex: 0 0 auto;
-        gap: 10px;
-      }
-      .subscription-actions form {
-        margin: 0;
-      }
-      .cancel-subscription-button {
-        background: #fff7ed;
-        border-color: #fed7aa;
-        color: #9a3412;
-      }
-      .cancel-subscription-button:hover {
-        background: #ffedd5;
-        border-color: #fdba74;
-      }
-      main {
-        width: min(1120px, calc(100% - 40px));
-        margin: 0 auto;
-        padding: 34px 0 48px;
-      }
-      h1 {
-        margin: 0 0 10px;
-        font-size: 34px;
-        letter-spacing: 0;
-      }
-      p {
-        color: var(--muted);
-      }
-      .tabs {
-        display: flex;
-        gap: 8px;
-        border-bottom: 1px solid var(--line);
-        margin-top: 24px;
-      }
-      .tab {
-        border: 1px solid transparent;
-        border-radius: 6px 6px 0 0;
-        color: var(--muted);
-        display: inline-block;
-        font-weight: 650;
-        padding: 11px 16px;
-        text-decoration: none;
-      }
-      .tab.active {
-        background: var(--surface);
-        border-color: var(--line) var(--line) var(--surface);
-        color: var(--accent-dark);
-        margin-bottom: -1px;
-      }
-      .panel {
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 22px;
-        margin-top: 22px;
-      }
-      .tab-panel {
-        display: none;
-      }
-      .tab-panel.active {
-        display: block;
-      }
-      form {
-        display: grid;
-        gap: 14px;
-      }
-      .data-actions form + form {
-        margin-top: 22px;
-      }
-      .form-row {
-        display: flex;
-        gap: 12px;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-      label {
-        display: block;
-        font-weight: 650;
-        margin-bottom: 6px;
-      }
-      input[type="file"],
-      select {
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: #fbfcfe;
-        min-width: 260px;
-        padding: 10px;
-      }
-      select[multiple] {
-        min-height: 150px;
-      }
-      button {
-        border: 1px solid var(--accent);
-        border-radius: 6px;
-        background: var(--accent);
-        color: #fff;
-        cursor: pointer;
-        font-weight: 650;
-        padding: 11px 16px;
-      }
-      button:hover {
-        background: var(--accent-dark);
-        border-color: var(--accent-dark);
-      }
-      .auth-overlay {
-        align-items: center;
-        background: rgba(15, 23, 42, 0.62);
-        display: flex;
-        inset: 0;
-        justify-content: center;
-        padding: 24px;
-        position: fixed;
-        z-index: 1000;
-      }
-      .auth-card {
-        background: var(--surface);
-        border-radius: 8px;
-        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
-        max-width: 760px;
-        padding: 26px;
-        width: min(100%, 760px);
-      }
-      .auth-grid {
-        display: grid;
-        gap: 22px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-      .auth-card input {
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 10px;
-        width: 100%;
-      }
-      .auth-card h2,
-      .auth-card h3 {
-        margin-top: 0;
-      }
-      .download-links {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin: 16px 0;
-      }
-      .download-links a {
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        color: var(--accent-dark);
-        font-weight: 650;
-        padding: 9px 12px;
-        text-decoration: none;
-      }
-      .download-links a:hover {
-        border-color: var(--accent);
-      }
-      .error {
-        color: var(--danger);
-        font-weight: 650;
-      }
-      .metric-row {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 12px;
-        margin: 14px 0 18px;
-      }
-      .metric {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 14px;
-        background: #fbfcfe;
-      }
-      .metric span {
-        color: var(--muted);
-        display: block;
-        font-size: 12px;
-        font-weight: 750;
-        text-transform: uppercase;
-      }
-      .metric strong {
-        display: block;
-        font-size: 22px;
-        margin-top: 5px;
-      }
-      .table-wrap {
-        overflow-x: auto;
-      }
-      .tree-plot {
-        overflow-x: auto;
-      }
-      .tree-plot img {
-        display: block;
-        max-width: 100%;
-        min-width: 760px;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 14px;
-      }
-      th,
-      td {
-        border-bottom: 1px solid var(--line);
-        padding: 10px 12px;
-        text-align: left;
-        vertical-align: top;
-      }
-      th {
-        background: #f8fafc;
-        font-weight: 750;
-      }
-      tr:nth-child(even) td {
-        background: #fbfcfe;
-      }
-      .model-comparison tbody tr {
-        cursor: pointer;
-      }
-      .model-comparison tbody tr:hover td {
-        background: #eef6ff;
-      }
-      .model-comparison tbody tr.best-row td {
-        border-left: 4px solid #0f766e;
-      }
-      .model-comparison tbody tr.selected-row td {
-        background: #eef2ff;
-        box-shadow: inset 0 1px 0 #c7d2fe, inset 0 -1px 0 #c7d2fe;
-      }
-      .model-comparison tbody tr.selected-row.best-row td {
-        background: #ecfdf5;
-      }
-      .status-badges {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-      .status-badge {
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        color: var(--muted);
-        display: inline-block;
-        font-size: 12px;
-        font-weight: 750;
-        line-height: 1;
-        padding: 5px 8px;
-        white-space: nowrap;
-      }
-      .status-badge.best {
-        background: #ccfbf1;
-        border-color: #5eead4;
-        color: #115e59;
-      }
-      .status-badge.selected {
-        background: #e0e7ff;
-        border-color: #a5b4fc;
-        color: #3730a3;
-      }
-      .status-badge.fit {
-        background: #f8fafc;
-      }
-      .recommendation-panel {
-        border-left: 4px solid var(--accent);
-      }
-      .recommendation-grid {
-        display: grid;
-        gap: 18px;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-      .recommendation-grid h3 {
-        margin-bottom: 8px;
-      }
-      .recommendation-grid ul {
-        margin: 0;
-        padding-left: 18px;
-      }
-      .recommendation-grid li {
-        margin-bottom: 7px;
-      }
-      .threshold-control {
-        align-items: center;
-        display: grid;
-        gap: 12px;
-        grid-template-columns: minmax(180px, 1fr) 64px;
-      }
-      .threshold-control input[type="range"] {
-        accent-color: var(--accent);
-      }
-      .threshold-control output {
-        background: #f8fafc;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        font-variant-numeric: tabular-nums;
-        font-weight: 750;
-        padding: 8px 10px;
-        text-align: center;
-      }
-      .processing-overlay {
-        align-items: center;
-        background: rgba(15, 23, 42, 0.56);
-        bottom: 0;
-        display: none;
-        justify-content: center;
-        left: 0;
-        padding: 24px;
-        position: fixed;
-        right: 0;
-        top: 0;
-        z-index: 1000;
-      }
-      .processing-overlay.active {
-        display: flex;
-      }
-      .subscription-overlay {
-        align-items: center;
-        background: rgba(15, 23, 42, 0.62);
-        bottom: 0;
-        display: none;
-        justify-content: center;
-        left: 0;
-        padding: 24px;
-        position: fixed;
-        right: 0;
-        top: 0;
-        z-index: 1100;
-      }
-      .subscription-overlay.active {
-        display: flex;
-      }
-      .processing-dialog {
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
-        max-width: 360px;
-        padding: 26px;
-        text-align: center;
-        width: min(100%, 360px);
-      }
-      .subscription-dialog {
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
-        max-height: min(88vh, 760px);
-        max-width: 680px;
-        overflow-y: auto;
-        padding: 34px;
-        position: relative;
-        width: min(100%, 680px);
-      }
-      .subscription-dialog h2 {
-        margin: 0 0 8px;
-      }
-      .subscription-dialog p {
-        color: var(--muted);
-      }
-      .subscription-price {
-        color: var(--ink);
-        font-size: 20px;
-        font-weight: 800;
-      }
-      .subscription-benefits {
-        color: var(--ink);
-        display: grid;
-        gap: 10px 20px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        list-style: none;
-        margin: 18px 0;
-        padding-left: 0;
-      }
-      .subscription-benefits li {
-        padding-left: 26px;
-        padding-right: 6px;
-        position: relative;
-      }
-      .subscription-benefits li::before {
-        color: #0f766e;
-        content: "✓";
-        font-weight: 850;
-        left: 0;
-        position: absolute;
-        top: 0;
-      }
-      .modal-close {
-        background: #f8fafc;
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        color: var(--muted);
-        height: 32px;
-        padding: 0;
-        position: absolute;
-        right: 14px;
-        top: 14px;
-        width: 32px;
-      }
-      .processing-spinner {
-        animation: spin 0.85s linear infinite;
-        border: 4px solid #d8dee8;
-        border-top-color: var(--accent);
-        border-radius: 999px;
-        height: 44px;
-        margin: 0 auto 16px;
-        width: 44px;
-      }
-      .processing-dialog h2 {
-        margin: 0 0 8px;
-      }
-      .processing-dialog p {
-        color: var(--muted);
-        margin: 0;
-      }
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
-      @media (max-width: 760px) {
-        .metric-row {
-          grid-template-columns: 1fr;
-        }
-        .recommendation-grid {
-          grid-template-columns: 1fr;
-        }
-        .auth-grid {
-          grid-template-columns: 1fr;
-        }
-        .subscription-banner {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-        .subscription-benefits {
-          grid-template-columns: 1fr;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <header>
-      <div class="header-content">
-        <div class="brand">ModelMetrica</div>
-        {% if is_authenticated %}
-          <div class="user-actions">
-            <span>{{ current_username }}</span>
-            <span class="subscription-status {{ 'active' if has_subscription else '' }}">{{ 'Pro active' if has_subscription else 'Free plan' }}</span>
-            <a class="logout-link" href="{{ url_for('logout') }}">Log out</a>
-          </div>
-        {% endif %}
-      </div>
-    </header>
-    {% if is_authenticated %}
-    <main>
-      <h1>Modeling workspace</h1>
-      <p>Upload a CSV or Excel file, inspect the first rows, then run classification or regression analysis.</p>
-      <div class="subscription-banner">
-        <div>
-          <strong>Subscription status</strong>
-          <p>{{ 'Your Pro subscription is active. Pro classification and Pro regression are unlocked.' if has_subscription else 'You are on the free plan. Pro classification and Pro regression require a subscription.' }}</p>
-        </div>
-        <div class="subscription-actions">
-          <span class="subscription-status {{ 'active' if has_subscription else '' }}">{{ 'Pro active' if has_subscription else 'Free plan' }}</span>
-          {% if has_subscription %}
-            <form method="post" action="{{ url_for('cancel_subscription') }}" onsubmit="return confirm('Cancel your Pro subscription? Pro access will be removed after cancellation.');">
-              <button type="submit" class="cancel-subscription-button">Cancel subscription</button>
-            </form>
-          {% endif %}
-        </div>
-      </div>
-
-      <nav class="tabs">
-        <a class="tab {{ 'active' if active_tab == 'data' else '' }}" href="#data">Data</a>
-        <a class="tab {{ 'active' if active_tab == 'classification' else '' }}" href="#classification">Classification</a>
-        <a class="tab {{ 'active' if active_tab == 'regression' else '' }}" href="#regression">Regression</a>
-        <a class="tab {{ 'active' if active_tab == 'pro_classification' else '' }}" href="#pro_classification">Pro classification</a>
-        <a class="tab {{ 'active' if active_tab == 'pro_regression' else '' }}" href="#pro_regression">Pro regression</a>
-      </nav>
-
-      <section id="data" class="tab-panel {{ 'active' if active_tab == 'data' else '' }}">
-        <div class="panel data-actions">
-          <form method="post" enctype="multipart/form-data">
-            <input type="hidden" name="form_name" value="upload">
-            <input type="hidden" name="active_tab" value="data">
-            <div>
-              <label for="data_file">Dataset</label>
-              <div class="form-row">
-                <input id="data_file" type="file" name="data_file" accept=".csv,.xls,.xlsx" required>
-                <button type="submit">Upload and preview</button>
-              </div>
-            </div>
-          </form>
-          <form method="post">
-            <input type="hidden" name="form_name" value="test_data">
-            <input type="hidden" name="active_tab" value="data">
-            <div>
-              <label>Test data</label>
-              <div class="form-row">
-                <button type="submit">Load test data</button>
-                <p>Simulates 1,000 rows with targets for classification and regression.</p>
-              </div>
-            </div>
-          </form>
-          {% if data_error %}
-            <p class="error">{{ data_error }}</p>
-          {% endif %}
-        </div>
-
-        {% if table_html %}
-          <div class="panel">
-            <h2>{{ filename }}</h2>
-            <p>Showing the first {{ row_count }} rows from {{ total_rows }} total rows.</p>
-            <div class="table-wrap">
-              {{ table_html|safe }}
-            </div>
-          </div>
-        {% endif %}
-      </section>
-
-      {{ render_classification_tab(classification_tab, active_tab, has_data, columns) }}
-      {{ render_regression_tab(regression_tab, active_tab, has_data, columns) }}
-      {{ render_classification_tab(pro_classification_tab, active_tab, has_data, columns) }}
-      {{ render_regression_tab(pro_regression_tab, active_tab, has_data, columns) }}
-    </main>
-    {% endif %}
-    {% if not is_authenticated %}
-      <div class="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="auth-title">
-        <div class="auth-card">
-          <h2 id="auth-title">Welcome to ModelMetrica</h2>
-          <p>Log in or create an account to access the modeling workspace.</p>
-          {% if auth_error %}
-            <p class="error">{{ auth_error }}</p>
-          {% endif %}
-          <div class="auth-grid">
-            <form method="post">
-              <input type="hidden" name="form_name" value="login">
-              <h3>Log in</h3>
-              <div>
-                <label for="login_username">Username</label>
-                <input id="login_username" name="username" autocomplete="username" required>
-              </div>
-              <div>
-                <label for="login_password">Password</label>
-                <input id="login_password" name="password" type="password" autocomplete="current-password" required>
-              </div>
-              <button type="submit">Log in</button>
-            </form>
-            <form method="post">
-              <input type="hidden" name="form_name" value="signup">
-              <h3>Sign up</h3>
-              <div>
-                <label for="signup_username">Username</label>
-                <input id="signup_username" name="username" autocomplete="username" required>
-              </div>
-              <div>
-                <label for="signup_password">Password</label>
-                <input id="signup_password" name="password" type="password" autocomplete="new-password" minlength="6" required>
-              </div>
-              <button type="submit">Create account</button>
-            </form>
-          </div>
-        </div>
-      </div>
-    {% endif %}
-    <div id="processing-overlay" class="processing-overlay" role="alertdialog" aria-modal="true" aria-labelledby="processing-title" aria-describedby="processing-description">
-      <div class="processing-dialog">
-        <div class="processing-spinner" aria-hidden="true"></div>
-        <h2 id="processing-title">Processing</h2>
-        <p id="processing-description">Running the model. This may take a moment.</p>
-      </div>
-    </div>
-    <div id="subscription-overlay" class="subscription-overlay" role="dialog" aria-modal="true" aria-labelledby="subscription-title" aria-describedby="subscription-description">
-      <div class="subscription-dialog">
-        <button type="button" class="modal-close" data-close-subscription aria-label="Close subscription popup">x</button>
-        <h2 id="subscription-title">Pro subscription required</h2>
-        <p id="subscription-description">Pro classification and Pro regression require an active subscription.</p>
-        <ul class="subscription-benefits">
-          <li>Compare multiple models side by side.</li>
-          <li>Select any fitted model for detailed drill-down.</li>
-          <li>Use grid or random hyperparameter tuning.</li>
-          <li>See default vs tuned model performance.</li>
-          <li>Control missing values, encoding, scaling, seeds, and outliers.</li>
-          <li>Review fold-by-fold cross-validation diagnostics.</li>
-          <li>Inspect ROC and precision-recall curves for classification.</li>
-          <li>Tune classification decision thresholds interactively.</li>
-          <li>Analyze predicted vs actual and residual plots for regression.</li>
-          <li>View coefficients and feature importance when available.</li>
-          <li>Get guided recommendations with evidence and concerns.</li>
-          <li>Keep recent Pro run history across refreshes.</li>
-          <li>Export durable HTML and PDF Pro reports.</li>
-        </ul>
-        <p class="subscription-price">{{ subscription_price }}</p>
-        {% if mollie_configured %}
-          <form method="post" action="{{ url_for('start_subscription') }}">
-            <button type="submit">Subscribe with Mollie</button>
-          </form>
-        {% else %}
-          <p class="error">Mollie payments are not configured yet. Set MOLLIE_API_KEY and a public MOLLIE_BASE_URL to enable checkout.</p>
-        {% endif %}
-      </div>
-    </div>
-    <script>
-      const tabs = document.querySelectorAll(".tab");
-      const panels = document.querySelectorAll(".tab-panel");
-      const processingOverlay = document.getElementById("processing-overlay");
-      const subscriptionOverlay = document.getElementById("subscription-overlay");
-      const hasSubscription = {{ 'true' if has_subscription else 'false' }};
-
-      function showProcessingOverlay() {
-        if (processingOverlay) {
-          processingOverlay.classList.add("active");
-        }
-      }
-
-      function showSubscriptionOverlay() {
-        if (subscriptionOverlay) {
-          subscriptionOverlay.classList.add("active");
-        }
-      }
-
-      function hideSubscriptionOverlay() {
-        if (subscriptionOverlay) {
-          subscriptionOverlay.classList.remove("active");
-        }
-      }
-
-      function activateTab(hash) {
-        const validTabs = ["#classification", "#regression", "#pro_classification", "#pro_regression"];
-        const target = validTabs.includes(hash) ? hash.slice(1) : "data";
-        tabs.forEach((tab) => tab.classList.toggle("active", tab.getAttribute("href") === `#${target}`));
-        panels.forEach((panel) => panel.classList.toggle("active", panel.id === target));
-      }
-
-      tabs.forEach((tab) => {
-        tab.addEventListener("click", (event) => {
-          event.preventDefault();
-          history.replaceState(null, "", tab.getAttribute("href"));
-          activateTab(tab.getAttribute("href"));
-        });
-      });
-
-      document.querySelectorAll(".model-comparison tbody tr[data-model-name]").forEach((row) => {
-        row.addEventListener("click", () => {
-          const panel = row.closest(".tab-panel");
-          if (!panel) {
-            return;
-          }
-          const detailSelect = panel.querySelector("select[name$='_detail_model']");
-          const form = panel.querySelector("form");
-          if (!detailSelect || !form) {
-            return;
-          }
-          detailSelect.value = row.dataset.modelName;
-          form.requestSubmit ? form.requestSubmit() : form.submit();
-        });
-      });
-
-      document.querySelectorAll("form[data-run-form]").forEach((form) => {
-        form.addEventListener("submit", (event) => {
-          if (!form.checkValidity()) {
-            return;
-          }
-          if (form.hasAttribute("data-pro-run-form") && !hasSubscription) {
-            event.preventDefault();
-            showSubscriptionOverlay();
-            return;
-          }
-          showProcessingOverlay();
-        });
-      });
-
-      document.querySelectorAll("[data-close-subscription]").forEach((button) => {
-        button.addEventListener("click", hideSubscriptionOverlay);
-      });
-
-      if (subscriptionOverlay) {
-        subscriptionOverlay.addEventListener("click", (event) => {
-          if (event.target === subscriptionOverlay) {
-            hideSubscriptionOverlay();
-          }
-        });
-      }
-
-      document.querySelectorAll("[data-threshold-input]").forEach((input) => {
-        const output = input.closest(".threshold-control")?.querySelector("[data-threshold-output]");
-        const update = () => {
-          if (output) {
-            output.value = Number(input.value).toFixed(3);
-            output.textContent = Number(input.value).toFixed(3);
-          }
-        };
-        input.addEventListener("input", update);
-        update();
-      });
-
-      if (window.location.hash) {
-        activateTab(window.location.hash);
-      }
-
-      window.addEventListener("pageshow", () => {
-        if (processingOverlay) {
-          processingOverlay.classList.remove("active");
-        }
-      });
-    </script>
-  </body>
-</html>
-"""
 
 
 def allowed_file(filename: str) -> bool:
@@ -4222,9 +2811,14 @@ def recommendation_report_frame(recommendation):
         {"Section": "Recommendation", "Item": recommendation.get("title", "")},
         {"Section": "Summary", "Item": recommendation.get("summary", "")},
     ]
-    for section in ["evidence", "concerns", "actions"]:
-        section_label = section.capitalize()
-        for item in recommendation.get(section, []):
+    section_items = [
+        ("Why this model", recommendation.get("why_best") or recommendation.get("evidence") or []),
+        ("Feature interpretation", recommendation.get("feature_interpretation") or []),
+        ("Warnings", recommendation.get("warnings") or recommendation.get("concerns") or []),
+        ("Next actions", recommendation.get("actions") or []),
+    ]
+    for section_label, items in section_items:
+        for item in items:
             rows.append({"Section": section_label, "Item": item})
     return pd.DataFrame(rows)
 
@@ -4236,7 +2830,72 @@ def recommendation_html(recommendation):
     return display_table(frame, index=False, border=0, classes="report-table")
 
 
-def build_classification_recommendation(tab, rows, best_model_name, detail_model_name, output):
+def feature_frame_from_output(output, artifact_name):
+    csv_data = (output.get("download_data") or {}).get(artifact_name)
+    if not csv_data:
+        return None
+    try:
+        return pd.read_csv(StringIO(csv_data))
+    except Exception:
+        return None
+
+
+def top_feature_interpretations(output, task_type):
+    coefficients = feature_frame_from_output(output, "coefficients")
+    if coefficients is not None and "Coefficient" in coefficients.columns:
+        term_column = "Term" if "Term" in coefficients.columns else coefficients.columns[0]
+        frame = coefficients.copy()
+        frame = frame[frame[term_column].astype(str).str.lower() != "intercept"]
+        frame["abs_coefficient"] = frame["Coefficient"].abs()
+        frame = frame.sort_values("abs_coefficient", ascending=False).head(3)
+        items = []
+        for _, row in frame.iterrows():
+            term = str(row[term_column])
+            coefficient = float(row["Coefficient"])
+            direction = "positive" if coefficient >= 0 else "negative"
+            if task_type == "classification" and "Odds Ratio" in frame.columns:
+                odds_ratio = float(row["Odds Ratio"])
+                effect = "higher odds of the positive class" if coefficient >= 0 else "lower odds of the positive class"
+                items.append(f"{term} has the strongest {direction} coefficient; higher values are associated with {effect} (odds ratio {odds_ratio:.3f}).")
+            else:
+                effect = "higher predicted values" if coefficient >= 0 else "lower predicted values"
+                items.append(f"{term} has the strongest {direction} coefficient ({coefficient:.3f}), so higher values are associated with {effect}.")
+        if items:
+            return items
+
+    importances = feature_frame_from_output(output, "variable_importance")
+    if importances is not None and "Importance" in importances.columns:
+        name_column = "Predictor" if "Predictor" in importances.columns else importances.columns[0]
+        frame = importances.copy()
+        frame = frame[frame["Importance"] > 0].sort_values("Importance", ascending=False).head(3)
+        items = []
+        for _, row in frame.iterrows():
+            predictor = str(row[name_column])
+            importance = float(row["Importance"])
+            if "Importance SD" in frame.columns:
+                items.append(f"{predictor} is one of the strongest drivers by permutation importance ({importance:.3f}, SD {float(row['Importance SD']):.3f}).")
+            else:
+                items.append(f"{predictor} is one of the strongest drivers by model importance ({importance:.3f}).")
+        if items:
+            return items
+
+    return ["No coefficient or feature-importance table is available for this selected model."]
+
+
+def classification_balance_warning(data, target):
+    if data is None or target not in data:
+        return None
+    counts = data[target].dropna().value_counts()
+    total = int(counts.sum())
+    if total == 0 or counts.empty:
+        return None
+    minority_share = float(counts.min() / total)
+    if minority_share < 0.2:
+        return f"The target is imbalanced: the smallest class is {minority_share:.3f} of rows, so accuracy may overstate model quality."
+    return None
+
+
+def build_classification_recommendation(tab, rows, best_model_name, detail_model_name, output, data=None):
     selected_row = next((row for row in rows if row.get("_model_name") == detail_model_name), {})
     best_label = recommendation_label(tab, best_model_name)
     detail_label = recommendation_label(tab, detail_model_name)
@@ -4250,6 +2909,8 @@ def build_classification_recommendation(tab, rows, best_model_name, detail_model
     threshold = metric_value(output, "Decision threshold") or f"{tab.get('selected_threshold', 0.5):.3f}"
     tuned_accuracy = parse_display_metric(selected_row.get("Tuned accuracy"))
     default_accuracy = parse_display_metric(selected_row.get("Default accuracy"))
+    train_rows = metric_float(output, "Train rows")
+    test_rows = metric_float(output, "Test rows")
 
     evidence = []
     if accuracy is not None:
@@ -4263,18 +2924,42 @@ def build_classification_recommendation(tab, rows, best_model_name, detail_model
     if precision is not None and recall is not None:
         evidence.append(f"Threshold tradeoff: precision {precision:.3f}, recall {recall:.3f}.")
 
+    why_best = []
+    if detail_model_name == best_model_name:
+        if tuned_accuracy is not None:
+            why_best.append(f"{detail_label} ranked highest after tuning with test accuracy {tuned_accuracy:.3f}.")
+        elif accuracy is not None:
+            why_best.append(f"{detail_label} ranked highest on held-out test accuracy ({accuracy:.3f}).")
+        if cv_accuracy is not None:
+            why_best.append(f"Its cross-validation accuracy is {cv_accuracy:.3f}, giving a broader check beyond the single test split.")
+    else:
+        why_best.append(f"{best_label} is still the top-ranked model; this panel explains the selected detail model, {detail_label}.")
+
     concerns = []
     if best_model_name and detail_model_name != best_model_name:
         concerns.append(f"The selected detail model is not the top-ranked model; {best_label} ranked best in the comparison.")
+    if accuracy is not None and cv_accuracy is not None and accuracy - cv_accuracy >= 0.08:
+        concerns.append("Test accuracy is meaningfully higher than CV accuracy, which can indicate overfitting or a lucky test split.")
     if cv_sd is not None and cv_sd >= 0.06:
         concerns.append("CV accuracy varies noticeably across folds, so the result may be split-sensitive.")
     if tuned_accuracy is not None and default_accuracy is not None and tuned_accuracy <= default_accuracy + 0.001:
         concerns.append("Hyperparameter tuning did not materially improve test accuracy.")
+    if precision is not None and precision < 0.65:
+        concerns.append("Precision is weak, so many positive predictions may be false positives.")
+    if recall is not None and recall < 0.65:
+        concerns.append("Recall is weak, so the model may miss many true positives.")
+    if f1 is not None and f1 < 0.65:
+        concerns.append("F1 is weak, suggesting the precision-recall balance may need work.")
     if precision is not None and recall is not None and abs(precision - recall) >= 0.15:
         higher = "precision" if precision > recall else "recall"
         concerns.append(f"The selected threshold is {higher}-heavy; review whether that matches the decision cost.")
     if specificity is not None and recall is not None and abs(specificity - recall) >= 0.2:
         concerns.append("Recall and specificity are far apart, suggesting asymmetric errors at the selected threshold.")
+    balance_warning = classification_balance_warning(data, tab.get("selected_target"))
+    if balance_warning:
+        concerns.append(balance_warning)
+    if test_rows is not None and test_rows < 20:
+        concerns.append("The held-out test set is small, so one or two rows can noticeably move the reported metrics.")
     if not concerns:
         concerns.append("No major stability or threshold concerns are visible from the current diagnostics.")
 
@@ -4285,20 +2970,37 @@ def build_classification_recommendation(tab, rows, best_model_name, detail_model
         actions.append("Try more folds, more data, or simpler models to confirm stability.")
     if precision is not None and recall is not None:
         actions.append("Adjust the decision threshold to balance precision and recall for the use case.")
+    if balance_warning:
+        actions.append("Consider stratified sampling, class weighting, or resampling before relying on accuracy alone.")
+    if train_rows is not None and train_rows < 100:
+        actions.append("Collect more labeled rows before treating the comparison as final.")
     if not tuning_enabled(tab):
         actions.append("Enable hyperparameter tuning for the strongest candidate models.")
+    if tab.get("selected_scaling") == "off" and detail_model_name in {"logistic", "svm", "knn"}:
+        actions.append("Try feature scaling for models that depend on coefficient size, margins, or distance.")
+    if any("accuracy is meaningfully higher than CV accuracy" in concern for concern in concerns):
+        actions.append("Compare a simpler model and check for leakage-prone columns that encode the outcome.")
     actions.append("Review feature importance or coefficients for plausibility before sharing the report.")
 
     title = f"Recommend {best_label}"
     if detail_model_name != best_model_name:
         summary = f"{best_label} is recommended by the comparison ranking; the panel below currently explains selected detail model {detail_label}."
     else:
-        summary = f"{detail_label} is the strongest current candidate based on the comparison ranking and selected-threshold diagnostics."
+        summary = f"{detail_label} performed best among the compared classifiers, with the selection based on test accuracy, CV stability, and threshold diagnostics."
 
-    return {"title": title, "summary": summary, "evidence": evidence, "concerns": concerns, "actions": actions}
+    return {
+        "title": title,
+        "summary": summary,
+        "why_best": why_best or evidence[:2],
+        "feature_interpretation": top_feature_interpretations(output, "classification"),
+        "warnings": concerns,
+        "evidence": evidence,
+        "concerns": concerns,
+        "actions": actions,
+    }
 
 
-def build_regression_recommendation(tab, rows, best_model_name, detail_model_name, output):
+def build_regression_recommendation(tab, rows, best_model_name, detail_model_name, output, data=None):
     selected_row = next((row for row in rows if row.get("_model_name") == detail_model_name), {})
     best_label = recommendation_label(tab, best_model_name)
     detail_label = recommendation_label(tab, detail_model_name)
@@ -4311,6 +3013,8 @@ def build_regression_recommendation(tab, rows, best_model_name, detail_model_nam
     residual_sd = metric_float(output, "Residual SD")
     tuned_rmse = parse_display_metric(selected_row.get("Tuned RMSE"))
     default_rmse = parse_display_metric(selected_row.get("Default RMSE"))
+    train_rows = metric_float(output, "Train rows")
+    test_rows = metric_float(output, "Test rows")
 
     evidence = []
     if rmse is not None:
@@ -4324,6 +3028,17 @@ def build_regression_recommendation(tab, rows, best_model_name, detail_model_nam
     if residual_mean is not None and residual_sd is not None:
         evidence.append(f"Residual mean is {residual_mean:.3f} with residual SD {residual_sd:.3f}.")
 
+    why_best = []
+    if detail_model_name == best_model_name:
+        if tuned_rmse is not None:
+            why_best.append(f"{detail_label} ranked best after tuning with test RMSE {tuned_rmse:.3f}.")
+        elif rmse is not None:
+            why_best.append(f"{detail_label} ranked best by the lowest held-out test RMSE ({rmse:.3f}).")
+        if cv_rmse is not None:
+            why_best.append(f"Its cross-validation RMSE is {cv_rmse:.3f}, giving a stability check across folds.")
+    else:
+        why_best.append(f"{best_label} is still the top-ranked model by RMSE; this panel explains the selected detail model, {detail_label}.")
+
     concerns = []
     if best_model_name and detail_model_name != best_model_name:
         concerns.append(f"The selected detail model is not the top-ranked model; {best_label} ranked best by RMSE.")
@@ -4331,12 +3046,18 @@ def build_regression_recommendation(tab, rows, best_model_name, detail_model_nam
         concerns.append("CV RMSE is substantially higher than test RMSE, suggesting possible split optimism.")
     if cv_rmse_sd is not None and cv_rmse is not None and cv_rmse_sd > cv_rmse * 0.2:
         concerns.append("CV RMSE varies meaningfully across folds.")
+    if r_squared is not None and r_squared < 0.2:
+        concerns.append("Test R squared is low, so the model explains only a small share of target variation.")
     if residual_mean is not None and residual_sd is not None and residual_sd > 0 and abs(residual_mean) > residual_sd * 0.1:
         concerns.append("Residual mean is not close to zero relative to residual spread, suggesting possible bias.")
+    if residual_sd is not None and rmse is not None and residual_sd > rmse * 1.5:
+        concerns.append("Residual spread is high relative to RMSE, suggesting noisy predictions or uneven errors.")
     if tuned_rmse is not None and default_rmse is not None and tuned_rmse >= default_rmse - 0.001:
         concerns.append("Hyperparameter tuning did not materially reduce RMSE.")
     if cv_r_squared is not None and cv_r_squared < 0:
         concerns.append("CV R squared is below zero, so the model may generalize poorly.")
+    if test_rows is not None and test_rows < 20:
+        concerns.append("The held-out test set is small, so the regression metrics may be sensitive to individual rows.")
     if not concerns:
         concerns.append("No major residual or cross-validation concerns are visible from the current diagnostics.")
 
@@ -4347,17 +3068,34 @@ def build_regression_recommendation(tab, rows, best_model_name, detail_model_nam
         actions.append("Compare simpler models or add data to reduce fold-to-fold variability.")
     if residual_mean is not None and residual_sd is not None and residual_sd > 0 and abs(residual_mean) > residual_sd * 0.1:
         actions.append("Inspect residual plots for systematic under- or over-prediction.")
+    if train_rows is not None and train_rows < 100:
+        actions.append("Collect more rows before treating the ranking as final.")
+    if r_squared is not None and r_squared < 0.2:
+        actions.append("Add more predictive features, transform the target, or segment the problem if the relationship is weak.")
+    if any("CV RMSE is substantially higher" in concern for concern in concerns):
+        actions.append("Check for leakage-prone columns and compare simpler regularized models.")
     if not tuning_enabled(tab):
         actions.append("Enable hyperparameter tuning for regularized and tree-based candidates.")
+    if tab.get("selected_scaling") == "off" and detail_model_name in {"ridge", "lasso", "svr", "knn"}:
+        actions.append("Try feature scaling for regularized, margin-based, or distance-based models.")
     actions.append("Review feature importance or coefficients for domain plausibility.")
 
     title = f"Recommend {best_label}"
     if detail_model_name != best_model_name:
         summary = f"{best_label} is recommended by the comparison ranking; the panel below currently explains selected detail model {detail_label}."
     else:
-        summary = f"{detail_label} is the strongest current candidate based on RMSE ranking, CV stability, and residual diagnostics."
+        summary = f"{detail_label} performed best among the compared regressors, with the selection based on RMSE ranking, CV stability, and residual diagnostics."
 
-    return {"title": title, "summary": summary, "evidence": evidence, "concerns": concerns, "actions": actions}
+    return {
+        "title": title,
+        "summary": summary,
+        "why_best": why_best or evidence[:2],
+        "feature_interpretation": top_feature_interpretations(output, "regression"),
+        "warnings": concerns,
+        "evidence": evidence,
+        "concerns": concerns,
+        "actions": actions,
+    }
 
 
 
@@ -4519,7 +3257,6 @@ def handle_classification_comparison_submission(tab, dataset):
             detail_options,
         )
         detail_output = add_cv_diagnostics(detail_output, tab, dataset["data"], detail_model_name, detail_options)
-        tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
             row["_is_best"] = row["_model_name"] == best_model_name
             row["_is_detail"] = row["_model_name"] == detail_model_name
@@ -4530,7 +3267,8 @@ def handle_classification_comparison_submission(tab, dataset):
             detail_model_name,
             ["Metric", "Default", "Tuned"],
         )
-        tab["recommendation"] = build_classification_recommendation(tab, rows, best_model_name, detail_model_name, tab["output"])
+        tab["recommendation"] = build_classification_recommendation(tab, rows, best_model_name, detail_model_name, detail_output, dataset["data"])
+        tab["output"] = register_downloads(tab["form_name"], detail_output)
     else:
         tab["error"] = "No selected model could be fit."
         tab["detail_metric_comparison_html"] = None
@@ -4911,7 +3649,6 @@ def handle_regression_comparison_submission(tab, dataset):
             detail_options,
         )
         detail_output = add_cv_diagnostics(detail_output, tab, dataset["data"], detail_model_name, detail_options)
-        tab["output"] = register_downloads(tab["form_name"], detail_output)
         for row in rows:
             row["_is_best"] = row["_model_name"] == best_model_name
             row["_is_detail"] = row["_model_name"] == detail_model_name
@@ -4922,7 +3659,8 @@ def handle_regression_comparison_submission(tab, dataset):
             detail_model_name,
             ["Metric", "Default", "Tuned"],
         )
-        tab["recommendation"] = build_regression_recommendation(tab, rows, best_model_name, detail_model_name, tab["output"])
+        tab["recommendation"] = build_regression_recommendation(tab, rows, best_model_name, detail_model_name, detail_output, dataset["data"])
+        tab["output"] = register_downloads(tab["form_name"], detail_output)
     else:
         tab["error"] = "No selected model could be fit."
         tab["detail_metric_comparison_html"] = None
@@ -5048,8 +3786,8 @@ def index():
     row_count = min(25, len(data)) if has_data else 0
     total_rows = len(data) if has_data else 0
 
-    return render_template_string(
-        PAGE_TEMPLATE,
+    return render_template(
+        "index.html",
         active_tab=active_tab,
         auth_error=auth_error,
         is_authenticated=authenticated,
@@ -5247,7 +3985,7 @@ def pro_report_html(tab_name, snapshot, dataset):
         sections.extend(["<section><h2>Model comparison</h2>", comparison_table, "</section>"])
 
     if recommendation:
-        sections.extend(["<section><h2>Model recommendation</h2>", recommendation_html(recommendation), "</section>"])
+        sections.extend(["<section><h2>Explain this run</h2>", recommendation_html(recommendation), "</section>"])
 
     sections.extend([
         "<section><h2>Selected detail model</h2>",
@@ -5429,7 +4167,7 @@ def pro_report_pdf_bytes(tab_name, snapshot, dataset):
         )
         add_pdf_table_pages(pdf, "Dataset Metadata", pd.DataFrame(report_metadata_rows(tab_name, snapshot, dataset)), rows_per_page=22)
         add_pdf_table_pages(pdf, "Model Comparison", csv_report_frame(artifacts.get("model_comparison")), rows_per_page=18)
-        add_pdf_table_pages(pdf, "Model Recommendation", recommendation_report_frame(recommendation), rows_per_page=20)
+        add_pdf_table_pages(pdf, "Explain This Run", recommendation_report_frame(recommendation), rows_per_page=20)
         add_pdf_table_pages(pdf, "Selected Detail Metrics", output_metrics_frame(output), rows_per_page=24)
         add_pdf_image_page(pdf, "Cross-Validation Fold Scores", output.get("cv_plot"))
         add_pdf_table_pages(pdf, "Cross-Validation Summary", csv_report_frame(artifacts.get("cv_summary")), rows_per_page=24)
@@ -5549,27 +4287,5 @@ def download_result(result_type, artifact):
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
