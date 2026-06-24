@@ -1532,6 +1532,170 @@ def current_user_id():
     return session.get("user_id")
 
 
+def current_user():
+    user_id = current_user_id()
+    if not user_id:
+        return None
+    with get_db_connection() as connection:
+        return connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
+def user_has_subscription(user=None):
+    user = user or current_user()
+    return bool(user and user["subscription_status"] == "active")
+
+
+def mollie_configured():
+    return bool(MOLLIE_API_KEY)
+
+
+def external_url_for(endpoint, **values):
+    if MOLLIE_BASE_URL:
+        return urljoin(MOLLIE_BASE_URL.rstrip("/") + "/", url_for(endpoint, **values).lstrip("/"))
+    return url_for(endpoint, _external=True, **values)
+
+
+def mollie_request(method, path, payload=None):
+    if not MOLLIE_API_KEY:
+        raise RuntimeError("Mollie API key is not configured.")
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request_obj = Request(
+        f"{MOLLIE_API_BASE}{path}",
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {MOLLIE_API_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urlopen(request_obj, timeout=20) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else {}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Mollie API error {exc.code}: {detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Could not reach Mollie: {exc.reason}") from exc
+
+
+def ensure_mollie_customer(user):
+    if user["mollie_customer_id"]:
+        return user["mollie_customer_id"]
+    customer = mollie_request(
+        "POST",
+        "/customers",
+        {
+            "name": user["username"],
+            "metadata": {"user_id": user["id"]},
+        },
+    )
+    customer_id = customer["id"]
+    with get_db_connection() as connection:
+        connection.execute("UPDATE users SET mollie_customer_id = ? WHERE id = ?", (customer_id, user["id"]))
+    return customer_id
+
+
+def create_mollie_first_payment(user):
+    customer_id = ensure_mollie_customer(user)
+    payment = mollie_request(
+        "POST",
+        "/payments",
+        {
+            "amount": {"currency": SUBSCRIPTION_CURRENCY, "value": SUBSCRIPTION_AMOUNT},
+            "customerId": customer_id,
+            "sequenceType": "first",
+            "description": SUBSCRIPTION_DESCRIPTION,
+            "redirectUrl": external_url_for("subscription_return"),
+            "webhookUrl": external_url_for("mollie_webhook"),
+            "metadata": {"user_id": user["id"]},
+        },
+    )
+    checkout_url = (payment.get("_links") or {}).get("checkout", {}).get("href")
+    if not checkout_url:
+        raise RuntimeError("Mollie did not return a checkout URL.")
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO subscription_payments
+            (user_id, mollie_payment_id, mollie_customer_id, status, checkout_url, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (user["id"], payment["id"], customer_id, payment.get("status", "open"), checkout_url),
+        )
+    return checkout_url
+
+
+def create_mollie_subscription(user_id, customer_id):
+    with get_db_connection() as connection:
+        user = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if user and user["mollie_subscription_id"]:
+        return user["mollie_subscription_id"]
+    subscription = mollie_request(
+        "POST",
+        f"/customers/{customer_id}/subscriptions",
+        {
+            "amount": {"currency": SUBSCRIPTION_CURRENCY, "value": SUBSCRIPTION_AMOUNT},
+            "interval": SUBSCRIPTION_INTERVAL,
+            "description": SUBSCRIPTION_DESCRIPTION,
+            "webhookUrl": external_url_for("mollie_webhook"),
+            "metadata": {"user_id": user_id},
+        },
+    )
+    subscription_id = subscription["id"]
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE users
+            SET subscription_status = 'active',
+                mollie_subscription_id = ?,
+                subscription_updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (subscription_id, user_id),
+        )
+    return subscription_id
+
+
+def sync_mollie_payment(payment_id):
+    payment = mollie_request("GET", f"/payments/{payment_id}")
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM subscription_payments WHERE mollie_payment_id = ?",
+            (payment_id,),
+        ).fetchone()
+        if not row:
+            return payment
+        status = payment.get("status", "unknown")
+        customer_id = payment.get("customerId") or row["mollie_customer_id"]
+        subscription_id = row["mollie_subscription_id"]
+        if status == "paid" and customer_id and not subscription_id:
+            subscription_id = create_mollie_subscription(row["user_id"], customer_id)
+        connection.execute(
+            """
+            UPDATE subscription_payments
+            SET status = ?,
+                mollie_customer_id = ?,
+                mollie_subscription_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE mollie_payment_id = ?
+            """,
+            (status, customer_id, subscription_id, payment_id),
+        )
+        if status in {"failed", "canceled", "expired"}:
+            connection.execute(
+                """
+                UPDATE users
+                SET subscription_status = 'inactive',
+                    subscription_updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND mollie_subscription_id IS NULL
+                """,
+                (row["user_id"],),
+            )
+    return payment
+
+
 def load_dataset_from_db(current_id):
     user_id = current_user_id()
     if not user_id:
@@ -4577,6 +4741,8 @@ def index():
             return redirect(url_for("index"))
 
     authenticated = is_user_authenticated()
+    user = current_user() if authenticated else None
+    has_subscription = user_has_subscription(user)
 
     if authenticated and request.method == "POST" and form_name == "upload":
         uploaded_file = request.files.get("data_file")
@@ -4600,11 +4766,16 @@ def index():
 
     dataset = current_dataset() if authenticated else None
 
-    if authenticated and request.method == "POST" and form_name in CLASSIFICATION_TAB_CONFIGS:
+    if authenticated and request.method == "POST" and form_name in PRO_TAB_NAMES and not has_subscription:
+        active_tab = form_name
+        model_tabs[form_name]["error"] = "A Pro subscription is required to run this analysis."
+    elif authenticated and request.method == "POST" and form_name in CLASSIFICATION_TAB_CONFIGS:
         active_tab = form_name
         handle_classification_submission(model_tabs[form_name], dataset)
 
-    if authenticated and request.method == "POST" and form_name in REGRESSION_TAB_CONFIGS:
+    if authenticated and request.method == "POST" and form_name in PRO_TAB_NAMES and not has_subscription:
+        active_tab = form_name
+    elif authenticated and request.method == "POST" and form_name in REGRESSION_TAB_CONFIGS:
         active_tab = form_name
         handle_regression_submission(model_tabs[form_name], dataset)
 
@@ -4638,6 +4809,9 @@ def index():
         auth_error=auth_error,
         is_authenticated=authenticated,
         current_username=session.get("username"),
+        has_subscription=has_subscription,
+        mollie_configured=mollie_configured(),
+        subscription_price=f"{SUBSCRIPTION_CURRENCY} {SUBSCRIPTION_AMOUNT} / {SUBSCRIPTION_INTERVAL}",
         data_error=data_error,
         table_html=table_html,
         filename=filename,
@@ -4655,6 +4829,57 @@ def index():
 def logout():
     session.clear()
     return redirect(url_for("index"))
+
+
+@app.route("/subscribe/start", methods=["POST"])
+def start_subscription():
+    if not is_user_authenticated():
+        return Response("Authentication required.", status=401, mimetype="text/plain")
+    user = current_user()
+    if user_has_subscription(user):
+        return redirect(url_for("index"))
+    try:
+        checkout_url = create_mollie_first_payment(user)
+    except RuntimeError as exc:
+        return Response(str(exc), status=503, mimetype="text/plain")
+
+    with get_db_connection() as connection:
+        payment = connection.execute(
+            """
+            SELECT mollie_payment_id
+            FROM subscription_payments
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user["id"],),
+        ).fetchone()
+    if payment:
+        session["pending_mollie_payment_id"] = payment["mollie_payment_id"]
+    return redirect(checkout_url)
+
+
+@app.route("/subscribe/return")
+def subscription_return():
+    payment_id = session.pop("pending_mollie_payment_id", None)
+    if payment_id:
+        try:
+            sync_mollie_payment(payment_id)
+        except RuntimeError:
+            pass
+    return redirect(url_for("index") + "#pro_classification")
+
+
+@app.route("/mollie/webhook", methods=["POST"])
+def mollie_webhook():
+    payment_id = request.form.get("id")
+    if not payment_id:
+        return Response("Missing payment id.", status=400, mimetype="text/plain")
+    try:
+        sync_mollie_payment(payment_id)
+    except RuntimeError:
+        return Response("Could not process webhook.", status=503, mimetype="text/plain")
+    return Response("OK", mimetype="text/plain")
 
 
 def latest_pro_run_snapshot(tab_name):
