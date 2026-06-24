@@ -782,6 +782,24 @@ PAGE_TEMPLATE = """
       .subscription-banner .subscription-status {
         flex: 0 0 auto;
       }
+      .subscription-actions {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        gap: 10px;
+      }
+      .subscription-actions form {
+        margin: 0;
+      }
+      .cancel-subscription-button {
+        background: #fff7ed;
+        border-color: #fed7aa;
+        color: #9a3412;
+      }
+      .cancel-subscription-button:hover {
+        background: #ffedd5;
+        border-color: #fdba74;
+      }
       main {
         width: min(1120px, calc(100% - 40px));
         margin: 0 auto;
@@ -1222,7 +1240,14 @@ PAGE_TEMPLATE = """
           <strong>Subscription status</strong>
           <p>{{ 'Your Pro subscription is active. Pro classification and Pro regression are unlocked.' if has_subscription else 'You are on the free plan. Pro classification and Pro regression require a subscription.' }}</p>
         </div>
-        <span class="subscription-status {{ 'active' if has_subscription else '' }}">{{ 'Pro active' if has_subscription else 'Free plan' }}</span>
+        <div class="subscription-actions">
+          <span class="subscription-status {{ 'active' if has_subscription else '' }}">{{ 'Pro active' if has_subscription else 'Free plan' }}</span>
+          {% if has_subscription %}
+            <form method="post" action="{{ url_for('cancel_subscription') }}" onsubmit="return confirm('Cancel your Pro subscription? Pro access will be removed after cancellation.');">
+              <button type="submit" class="cancel-subscription-button">Cancel subscription</button>
+            </form>
+          {% endif %}
+        </div>
       </div>
 
       <nav class="tabs">
@@ -1658,12 +1683,12 @@ def external_url_for(endpoint, **values):
     return url_for(endpoint, _external=True, **values)
 
 
-def mollie_request(method, path, payload=None):
+def mollie_request(method, path, payload=None, require_public_webhook=False):
     if not MOLLIE_API_KEY:
         raise RuntimeError("Mollie API key is not configured.")
     if not mollie_api_key_valid():
         raise RuntimeError("MOLLIE_API_KEY must be a Mollie profile API key that starts with test_ or live_.")
-    if not mollie_webhook_url_valid():
+    if require_public_webhook and not mollie_webhook_url_valid():
         raise RuntimeError("MOLLIE_BASE_URL must be a public URL that Mollie can reach for webhooks, for example an ngrok HTTPS URL.")
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request_obj = Request(
@@ -1718,6 +1743,7 @@ def create_mollie_first_payment(user):
             "webhookUrl": external_url_for("mollie_webhook"),
             "metadata": {"user_id": user["id"]},
         },
+        require_public_webhook=True,
     )
     checkout_url = (payment.get("_links") or {}).get("checkout", {}).get("href")
     if not checkout_url:
@@ -1749,6 +1775,7 @@ def create_mollie_subscription(user_id, customer_id):
             "webhookUrl": external_url_for("mollie_webhook"),
             "metadata": {"user_id": user_id},
         },
+        require_public_webhook=True,
     )
     subscription_id = subscription["id"]
     with get_db_connection() as connection:
@@ -1801,6 +1828,24 @@ def sync_mollie_payment(payment_id):
                 (row["user_id"],),
             )
     return payment
+
+
+def cancel_mollie_subscription(user):
+    customer_id = user["mollie_customer_id"]
+    subscription_id = user["mollie_subscription_id"]
+    if customer_id and subscription_id:
+        mollie_request("DELETE", f"/customers/{customer_id}/subscriptions/{subscription_id}")
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE users
+            SET subscription_status = 'inactive',
+                mollie_subscription_id = NULL,
+                subscription_updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (user["id"],),
+        )
 
 
 def load_dataset_from_db(current_id):
@@ -4975,6 +5020,20 @@ def subscription_return():
         except RuntimeError:
             pass
     return redirect(url_for("index") + "#pro_classification")
+
+
+@app.route("/subscribe/cancel", methods=["POST"])
+def cancel_subscription():
+    if not is_user_authenticated():
+        return Response("Authentication required.", status=401, mimetype="text/plain")
+    user = current_user()
+    if not user_has_subscription(user):
+        return redirect(url_for("index"))
+    try:
+        cancel_mollie_subscription(user)
+    except RuntimeError as exc:
+        return Response(str(exc), status=503, mimetype="text/plain")
+    return redirect(url_for("index"))
 
 
 @app.route("/mollie/webhook", methods=["POST"])
