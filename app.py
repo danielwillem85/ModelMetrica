@@ -1107,10 +1107,12 @@ PAGE_TEMPLATE = """
         border: 1px solid var(--line);
         border-radius: 8px;
         box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
-        max-width: 420px;
-        padding: 28px;
+        max-height: min(88vh, 760px);
+        max-width: 680px;
+        overflow-y: auto;
+        padding: 34px;
         position: relative;
-        width: min(100%, 420px);
+        width: min(100%, 680px);
       }
       .subscription-dialog h2 {
         margin: 0 0 8px;
@@ -1122,6 +1124,18 @@ PAGE_TEMPLATE = """
         color: var(--ink);
         font-size: 20px;
         font-weight: 800;
+      }
+      .subscription-benefits {
+        color: var(--ink);
+        display: grid;
+        gap: 10px 20px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        list-style-position: outside;
+        margin: 18px 0;
+        padding-left: 20px;
+      }
+      .subscription-benefits li {
+        padding-right: 6px;
       }
       .modal-close {
         background: #f8fafc;
@@ -1169,6 +1183,9 @@ PAGE_TEMPLATE = """
         .subscription-banner {
           align-items: flex-start;
           flex-direction: column;
+        }
+        .subscription-benefits {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -1303,6 +1320,21 @@ PAGE_TEMPLATE = """
         <button type="button" class="modal-close" data-close-subscription aria-label="Close subscription popup">x</button>
         <h2 id="subscription-title">Pro subscription required</h2>
         <p id="subscription-description">Pro classification and Pro regression require an active subscription.</p>
+        <ul class="subscription-benefits">
+          <li>Compare multiple models side by side.</li>
+          <li>Select any fitted model for detailed drill-down.</li>
+          <li>Use grid or random hyperparameter tuning.</li>
+          <li>See default vs tuned model performance.</li>
+          <li>Control missing values, encoding, scaling, seeds, and outliers.</li>
+          <li>Review fold-by-fold cross-validation diagnostics.</li>
+          <li>Inspect ROC and precision-recall curves for classification.</li>
+          <li>Tune classification decision thresholds interactively.</li>
+          <li>Analyze predicted vs actual and residual plots for regression.</li>
+          <li>View coefficients and feature importance when available.</li>
+          <li>Get guided recommendations with evidence and concerns.</li>
+          <li>Keep recent Pro run history across refreshes.</li>
+          <li>Export durable HTML and PDF Pro reports.</li>
+        </ul>
         <p class="subscription-price">{{ subscription_price }}</p>
         {% if mollie_configured %}
           <form method="post" action="{{ url_for('start_subscription') }}">
