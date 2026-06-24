@@ -49,6 +49,11 @@ from email_notifications import send_subscription_success_email
 from payments import PaymentService, SUBSCRIPTION_AMOUNT, SUBSCRIPTION_CURRENCY, SUBSCRIPTION_INTERVAL
 from reports import ReportRenderer
 
+try:
+    from lightgbm import LGBMClassifier
+except ImportError:
+    LGBMClassifier = None
+
 
 try:
     from dotenv import load_dotenv
@@ -552,6 +557,19 @@ def classification_estimator(model_name, options=None):
             learning_rate=tuned_float(options, "gradient_boosting", "learning_rate", 0.1),
             max_depth=tuned_int(options, "gradient_boosting", "max_depth", 3),
             random_state=preprocessing_seed(options),
+        ), options)
+    if model_name == "lightgbm":
+        if LGBMClassifier is None:
+            raise RuntimeError("LightGBM is not installed. Run pip install lightgbm or install requirements.txt.")
+        return with_probability_calibration(LGBMClassifier(
+            n_estimators=tuned_int(options, "lightgbm", "n_estimators", 200),
+            learning_rate=tuned_float(options, "lightgbm", "learning_rate", 0.05),
+            num_leaves=tuned_int(options, "lightgbm", "num_leaves", 31),
+            max_depth=tuned_int(options, "lightgbm", "max_depth", -1),
+            min_child_samples=tuned_int(options, "lightgbm", "min_child_samples", 20),
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+            verbosity=-1,
         ), options)
     if model_name == "naive_bayes":
         return with_probability_calibration(GaussianNB(
@@ -1275,6 +1293,71 @@ def fit_naive_bayes_model(data, target, predictors, test_size, cv_folds, options
     return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "naive_bayes", "Naive Bayes", options)
 
 
+def fit_lightgbm_model(data, target, predictors, test_size, cv_folds, options=None):
+    if LGBMClassifier is None:
+        raise RuntimeError("LightGBM is not installed. Run pip install lightgbm or install requirements.txt.")
+    if calibration_enabled(options):
+        return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "lightgbm", "LightGBM", options)
+
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
+    class_names = split["class_names"]
+    model = LGBMClassifier(
+        n_estimators=tuned_int(options, "lightgbm", "n_estimators", 200),
+        learning_rate=tuned_float(options, "lightgbm", "learning_rate", 0.05),
+        num_leaves=tuned_int(options, "lightgbm", "num_leaves", 31),
+        max_depth=tuned_int(options, "lightgbm", "max_depth", -1),
+        min_child_samples=tuned_int(options, "lightgbm", "min_child_samples", 20),
+        random_state=preprocessing_seed(options),
+        n_jobs=-1,
+        verbosity=-1,
+    )
+    model.fit(split["x_train"], split["y_train"])
+    predicted_labels = class_names[model.predict(split["x_test"])]
+    accuracy = accuracy_score(split["target_test"], predicted_labels)
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
+    importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
+
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Boosting rounds", "value": model.n_estimators},
+        {"label": "Classes", "value": len(class_names)},
+    ]
+    metrics = append_classification_cv(metrics, "lightgbm", x_encoded, target_values, cv_folds, options)
+    details = {
+        "Model": "LGBMClassifier",
+        "Boosting rounds": model.n_estimators,
+        "Learning rate": model.learning_rate,
+        "Leaves": model.num_leaves,
+        "Maximum depth": model.max_depth,
+        "Minimum child samples": model.min_child_samples,
+        "Probability calibration": calibration_label(options),
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": preprocessing_seed(options),
+    }
+
+    return {
+        "title": "LightGBM results",
+        "description": f"Target: {target}. Gradient boosting decision tree model; test-set metrics are shown.",
+        "target": target,
+        "positive_class": str(classes[1]) if len(classes) == 2 else None,
+        "metrics": metrics,
+        "coefficients_html": None,
+        "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
+        "details_html": details_table(add_preprocessing_details(details, options)),
+        "confusion_html": confusion.to_html(border=0, classes="confusion"),
+        "tree_plot": None,
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
+        },
+    }
+
+
 def fit_elastic_net_logistic_regression(data, target, predictors, test_size, cv_folds, options=None):
     if calibration_enabled(options):
         return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "elastic_net_logistic", "Elastic Net Logistic Regression", options, binary_only=True)
@@ -1735,6 +1818,7 @@ CLASSIFICATION_MODEL_FITTERS = {
     "random_forest": fit_random_forest_model,
     "extra_trees": fit_extra_trees_model,
     "gradient_boosting": fit_gradient_boosting_model,
+    "lightgbm": fit_lightgbm_model,
     "naive_bayes": fit_naive_bayes_model,
     "elastic_net_logistic": fit_elastic_net_logistic_regression,
     "svm": fit_svm_model,
@@ -1946,6 +2030,7 @@ CLASSIFICATION_MODEL_LABELS = {
     "random_forest": "Random Forest",
     "extra_trees": "Extra Trees",
     "gradient_boosting": "Gradient Boosting",
+    "lightgbm": "LightGBM",
     "naive_bayes": "Naive Bayes",
     "elastic_net_logistic": "Elastic Net Logistic Regression",
     "svm": "Support Vector Machine",
@@ -1994,6 +2079,16 @@ def classification_tuning_grid(model_name, estimator):
     if model_name == "gradient_boosting":
         prefix = estimator_step_name(estimator, GradientBoostingClassifier)
         return {f"{prefix}n_estimators": [50, 100], f"{prefix}learning_rate": [0.05, 0.1, 0.2], f"{prefix}max_depth": [2, 3]}
+    if model_name == "lightgbm":
+        if LGBMClassifier is None:
+            return {}
+        prefix = estimator_step_name(estimator, LGBMClassifier)
+        return {
+            f"{prefix}n_estimators": [100, 200],
+            f"{prefix}learning_rate": [0.03, 0.05, 0.1],
+            f"{prefix}num_leaves": [15, 31, 63],
+            f"{prefix}min_child_samples": [10, 20, 40],
+        }
     if model_name == "naive_bayes":
         prefix = estimator_step_name(estimator, GaussianNB)
         return {f"{prefix}var_smoothing": [1e-9, 1e-8, 1e-7]}

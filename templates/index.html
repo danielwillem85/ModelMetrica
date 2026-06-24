@@ -18,6 +18,7 @@
                   {% endif %}
                   <option value="gradient_boosting" {{ 'selected' if 'gradient_boosting' in tab.selected_models else '' }}>Gradient Boosting</option>
                   {% if tab.allow_model_comparison %}
+                  <option value="lightgbm" {{ 'selected' if 'lightgbm' in tab.selected_models else '' }}>LightGBM</option>
                   <option value="naive_bayes" {{ 'selected' if 'naive_bayes' in tab.selected_models else '' }}>Naive Bayes</option>
                   <option value="elastic_net_logistic" {{ 'selected' if 'elastic_net_logistic' in tab.selected_models else '' }}>Elastic Net Logistic Regression</option>
                   {% endif %}
@@ -35,6 +36,7 @@
                   <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest</option>
                   <option value="extra_trees" {{ 'selected' if tab.selected_detail_model == 'extra_trees' else '' }}>Extra Trees</option>
                   <option value="gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'gradient_boosting' else '' }}>Gradient Boosting</option>
+                  <option value="lightgbm" {{ 'selected' if tab.selected_detail_model == 'lightgbm' else '' }}>LightGBM</option>
                   <option value="naive_bayes" {{ 'selected' if tab.selected_detail_model == 'naive_bayes' else '' }}>Naive Bayes</option>
                   <option value="elastic_net_logistic" {{ 'selected' if tab.selected_detail_model == 'elastic_net_logistic' else '' }}>Elastic Net Logistic Regression</option>
                   <option value="svm" {{ 'selected' if tab.selected_detail_model == 'svm' else '' }}>Support Vector Machine</option>
