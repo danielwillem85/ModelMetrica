@@ -15,8 +15,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from sklearn.calibration import CalibratedClassifierCV
 from flask import Flask, Response, redirect, render_template, request, session, url_for
 from sklearn.ensemble import (
+    ExtraTreesClassifier,
     GradientBoostingClassifier,
     GradientBoostingRegressor,
     RandomForestClassifier,
@@ -26,6 +28,7 @@ from sklearn.inspection import permutation_importance
 from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score, average_precision_score, auc, precision_recall_curve, roc_curve
 from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold, cross_val_score, train_test_split
+from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -226,6 +229,7 @@ def preprocessing_options(tab):
         "scaling": tab.get("selected_scaling", "on"),
         "split_seed": tab.get("selected_split_seed", 42),
         "outlier_handling": tab.get("selected_outlier_handling", "none"),
+        "calibration": tab.get("selected_calibration", "off"),
         "tuned_params": tab.get("tuned_params", {}),
     }
 
@@ -487,6 +491,20 @@ def register_downloads(result_type, result):
     return result
 
 
+def calibration_method(options):
+    return (options or {}).get("calibration", "off")
+
+
+def calibration_enabled(options):
+    return calibration_method(options) in {"sigmoid", "isotonic"}
+
+
+def with_probability_calibration(estimator, options):
+    if not calibration_enabled(options):
+        return estimator
+    return CalibratedClassifierCV(estimator=estimator, method=calibration_method(options), cv=3)
+
+
 def classification_estimator(model_name, options=None):
     if model_name == "logistic":
         model = LogisticRegression(
@@ -494,28 +512,51 @@ def classification_estimator(model_name, options=None):
             max_iter=1000,
             random_state=preprocessing_seed(options),
         )
-        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        return with_probability_calibration(estimator, options)
+    if model_name == "elastic_net_logistic":
+        model = LogisticRegression(
+            C=tuned_float(options, "elastic_net_logistic", "C", 1.0),
+            l1_ratio=tuned_float(options, "elastic_net_logistic", "l1_ratio", 0.5),
+            max_iter=3000,
+            random_state=preprocessing_seed(options),
+            solver="saga",
+        )
+        estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        return with_probability_calibration(estimator, options)
     if model_name == "tree":
-        return DecisionTreeClassifier(
+        return with_probability_calibration(DecisionTreeClassifier(
             max_depth=tuned_param(options, "tree", "max_depth", 4),
             min_samples_leaf=tuned_int(options, "tree", "min_samples_leaf", 1),
             random_state=preprocessing_seed(options),
-        )
+        ), options)
     if model_name == "random_forest":
-        return RandomForestClassifier(
+        return with_probability_calibration(RandomForestClassifier(
             n_estimators=tuned_int(options, "random_forest", "n_estimators", 200),
             max_depth=tuned_param(options, "random_forest", "max_depth", None),
             min_samples_leaf=tuned_int(options, "random_forest", "min_samples_leaf", 1),
             random_state=preprocessing_seed(options),
             n_jobs=-1,
-        )
+        ), options)
+    if model_name == "extra_trees":
+        return with_probability_calibration(ExtraTreesClassifier(
+            n_estimators=tuned_int(options, "extra_trees", "n_estimators", 200),
+            max_depth=tuned_param(options, "extra_trees", "max_depth", None),
+            min_samples_leaf=tuned_int(options, "extra_trees", "min_samples_leaf", 1),
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+        ), options)
     if model_name == "gradient_boosting":
-        return GradientBoostingClassifier(
+        return with_probability_calibration(GradientBoostingClassifier(
             n_estimators=tuned_int(options, "gradient_boosting", "n_estimators", 100),
             learning_rate=tuned_float(options, "gradient_boosting", "learning_rate", 0.1),
             max_depth=tuned_int(options, "gradient_boosting", "max_depth", 3),
             random_state=preprocessing_seed(options),
-        )
+        ), options)
+    if model_name == "naive_bayes":
+        return with_probability_calibration(GaussianNB(
+            var_smoothing=tuned_float(options, "naive_bayes", "var_smoothing", 1e-9),
+        ), options)
     if model_name == "svm":
         model = SVC(
             kernel="rbf",
@@ -524,13 +565,15 @@ def classification_estimator(model_name, options=None):
             probability=True,
             random_state=preprocessing_seed(options),
         )
-        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        return with_probability_calibration(estimator, options)
     if model_name == "knn":
         model = KNeighborsClassifier(
             n_neighbors=tuned_int(options, "knn", "n_neighbors", 5),
             weights=tuned_param(options, "knn", "weights", "distance"),
         )
-        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        return with_probability_calibration(estimator, options)
     raise ValueError("Unknown classification model.")
 
 
@@ -736,7 +779,62 @@ def tree_plot_image(tree, feature_names, class_names):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def calibration_label(options):
+    labels = {"off": "Off", "sigmoid": "Sigmoid", "isotonic": "Isotonic"}
+    return labels.get(calibration_method(options), "Off")
+
+
+def fit_generic_classification_model(data, target, predictors, test_size, cv_folds, model_name, model_label, options=None, binary_only=False):
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=binary_only, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
+    class_names = split["class_names"]
+    estimator = classification_estimator(model_name, options)
+    estimator.fit(split["x_train"], split["y_train"])
+    predicted_codes = estimator.predict(split["x_test"])
+    predicted_labels = class_names[predicted_codes]
+    accuracy = accuracy_score(split["target_test"], predicted_labels)
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
+    importances = permutation_importance_frame(estimator, split["x_test"], split["y_test"], x_encoded.columns, "accuracy", options)
+
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Classes", "value": len(class_names)},
+    ]
+    metrics = append_classification_cv(metrics, model_name, x_encoded, target_values, cv_folds, options)
+    details = {
+        "Model": model_label,
+        "Probability calibration": calibration_label(options),
+        "Importance method": "Permutation importance on held-out test set",
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": preprocessing_seed(options),
+    }
+
+    return {
+        "title": f"{model_label} results",
+        "description": f"Target: {target}. Test-set metrics are shown. Classes: {', '.join(str(value) for value in classes)}.",
+        "target": target,
+        "positive_class": str(classes[1]) if len(classes) == 2 else None,
+        "metrics": metrics,
+        "coefficients_html": None,
+        "importances_html": permutation_importance_html(importances),
+        "details_html": details_table(add_preprocessing_details(details, options)),
+        "confusion_html": confusion.to_html(border=0, classes="confusion"),
+        "tree_plot": None,
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
+        },
+    }
+
+
 def fit_logistic_regression(data, target, predictors, test_size, cv_folds, options=None):
+    if calibration_enabled(options):
+        return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "logistic", "Logistic regression", options, binary_only=True)
+
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True, options=options)
     split = split_classification_data(target_values, x_encoded, test_size, options)
     y = (split["target_train"] == classes[1]).astype(float).to_numpy()
@@ -830,6 +928,9 @@ def fit_logistic_regression(data, target, predictors, test_size, cv_folds, optio
 
 
 def fit_tree_model(data, target, predictors, test_size, cv_folds, options=None):
+    if calibration_enabled(options):
+        return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "tree", "Tree model", options)
+
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
@@ -887,6 +988,9 @@ def fit_tree_model(data, target, predictors, test_size, cv_folds, options=None):
 
 
 def fit_random_forest_model(data, target, predictors, test_size, cv_folds, options=None):
+    if calibration_enabled(options):
+        return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "random_forest", "Random Forest", options)
+
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
@@ -942,6 +1046,9 @@ def fit_random_forest_model(data, target, predictors, test_size, cv_folds, optio
 
 
 def fit_gradient_boosting_model(data, target, predictors, test_size, cv_folds, options=None):
+    if calibration_enabled(options):
+        return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "gradient_boosting", "Gradient Boosting", options)
+
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
@@ -995,6 +1102,9 @@ def fit_gradient_boosting_model(data, target, predictors, test_size, cv_folds, o
 
 
 def fit_svm_model(data, target, predictors, test_size, cv_folds, options=None):
+    if calibration_enabled(options):
+        return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "svm", "Support Vector Machine", options)
+
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
@@ -1050,6 +1160,9 @@ def fit_svm_model(data, target, predictors, test_size, cv_folds, options=None):
 
 
 def fit_knn_model(data, target, predictors, test_size, cv_folds, options=None):
+    if calibration_enabled(options):
+        return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "knn", "kNN", options)
+
     _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
     split = split_classification_data(target_values, x_encoded, test_size, options)
     class_names = split["class_names"]
@@ -1093,6 +1206,133 @@ def fit_knn_model(data, target, predictors, test_size, cv_folds, options=None):
         "tree_plot": None,
         "download_data": {
             "variable_importance": importances.to_csv(index=False),
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
+        },
+    }
+
+
+def fit_extra_trees_model(data, target, predictors, test_size, cv_folds, options=None):
+    if calibration_enabled(options):
+        return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "extra_trees", "Extra Trees", options)
+
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=False, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
+    class_names = split["class_names"]
+    min_samples_leaf = tuned_int(options, "extra_trees", "min_samples_leaf", max(1, int(len(split["y_train"]) * 0.01)))
+    model = ExtraTreesClassifier(
+        n_estimators=tuned_int(options, "extra_trees", "n_estimators", 200),
+        max_depth=tuned_param(options, "extra_trees", "max_depth", None),
+        min_samples_leaf=min_samples_leaf,
+        random_state=preprocessing_seed(options),
+        n_jobs=-1,
+    )
+    model.fit(split["x_train"], split["y_train"])
+    predicted_labels = class_names[model.predict(split["x_test"])]
+    accuracy = accuracy_score(split["target_test"], predicted_labels)
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
+    importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
+
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Trees", "value": model.n_estimators},
+        {"label": "Classes", "value": len(class_names)},
+    ]
+    metrics = append_classification_cv(metrics, "extra_trees", x_encoded, target_values, cv_folds, options)
+    details = {
+        "Model": "ExtraTreesClassifier",
+        "Trees": model.n_estimators,
+        "Maximum depth": model.max_depth if model.max_depth is not None else "None",
+        "Minimum samples per leaf": min_samples_leaf,
+        "Probability calibration": calibration_label(options),
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": preprocessing_seed(options),
+    }
+
+    return {
+        "title": "Extra Trees results",
+        "description": f"Target: {target}. Extremely randomized tree ensemble; test-set metrics are shown.",
+        "target": target,
+        "positive_class": str(classes[1]) if len(classes) == 2 else None,
+        "metrics": metrics,
+        "coefficients_html": None,
+        "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
+        "details_html": details_table(add_preprocessing_details(details, options)),
+        "confusion_html": confusion.to_html(border=0, classes="confusion"),
+        "tree_plot": None,
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "confusion_matrix": confusion.to_csv(),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
+        },
+    }
+
+
+def fit_naive_bayes_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "naive_bayes", "Naive Bayes", options)
+
+
+def fit_elastic_net_logistic_regression(data, target, predictors, test_size, cv_folds, options=None):
+    if calibration_enabled(options):
+        return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "elastic_net_logistic", "Elastic Net Logistic Regression", options, binary_only=True)
+
+    _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True, options=options)
+    split = split_classification_data(target_values, x_encoded, test_size, options)
+    scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
+    model = LogisticRegression(
+        C=tuned_float(options, "elastic_net_logistic", "C", 1.0),
+        l1_ratio=tuned_float(options, "elastic_net_logistic", "l1_ratio", 0.5),
+        max_iter=3000,
+        random_state=preprocessing_seed(options),
+        solver="saga",
+    )
+    model.fit(scaled_train, split["y_train"])
+    predicted_codes = model.predict(scaled_test)
+    predicted_labels = split["class_names"][predicted_codes]
+    accuracy = accuracy_score(split["target_test"], predicted_labels)
+    confusion = confusion_table(split["target_test"].to_numpy(), predicted_labels)
+    coefficients = pd.DataFrame(
+        {
+            "Term": ["Intercept"] + list(x_encoded.columns),
+            "Coefficient": [model.intercept_[0]] + list(model.coef_[0]),
+        }
+    )
+    coefficients["Odds Ratio"] = np.exp(np.clip(coefficients["Coefficient"], -50, 50))
+
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+        {"label": "Test accuracy", "value": f"{accuracy:.3f}"},
+        {"label": "Non-zero coefficients", "value": int(np.sum(np.abs(model.coef_[0]) > 1e-8))},
+    ]
+    metrics = append_classification_cv(metrics, "elastic_net_logistic", x_encoded, target_values, cv_folds, options)
+    details = {
+        "Model": "Elastic Net Logistic Regression",
+        "C": model.C,
+        "L1 ratio": model.l1_ratio,
+        "Feature scaling": scaling_label,
+        "Probability calibration": calibration_label(options),
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": preprocessing_seed(options),
+    }
+
+    return {
+        "title": "Elastic Net Logistic Regression results",
+        "description": f"Target: {target}. Positive class: {classes[1]}. Metrics are computed on the held-out test set.",
+        "target": target,
+        "positive_class": str(classes[1]),
+        "metrics": metrics,
+        "coefficients_html": display_table(coefficients, index=False, border=0, classes="coefficients"),
+        "importances_html": None,
+        "details_html": details_table(add_preprocessing_details(details, options)),
+        "confusion_html": confusion.to_html(border=0, classes="confusion"),
+        "tree_plot": None,
+        "download_data": {
+            "coefficients": coefficients.to_csv(index=False),
             "confusion_matrix": confusion.to_csv(),
             "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
         },
@@ -1493,7 +1733,10 @@ CLASSIFICATION_MODEL_FITTERS = {
     "logistic": fit_logistic_regression,
     "tree": fit_tree_model,
     "random_forest": fit_random_forest_model,
+    "extra_trees": fit_extra_trees_model,
     "gradient_boosting": fit_gradient_boosting_model,
+    "naive_bayes": fit_naive_bayes_model,
+    "elastic_net_logistic": fit_elastic_net_logistic_regression,
     "svm": fit_svm_model,
     "knn": fit_knn_model,
 }
@@ -1533,6 +1776,7 @@ CLASSIFICATION_TAB_CONFIGS = {
         "scaling_field": "pro_classification_scaling",
         "split_seed_field": "pro_classification_split_seed",
         "outlier_handling_field": "pro_classification_outlier_handling",
+        "calibration_field": "pro_classification_calibration",
         "tuning_mode_field": "pro_classification_tuning_mode",
         "tuning_iterations_field": "pro_classification_tuning_iterations",
         "threshold_field": "pro_classification_threshold",
@@ -1589,10 +1833,12 @@ def make_model_tab(config):
             "selected_scaling": "on",
             "selected_split_seed": 42,
             "selected_outlier_handling": "none",
+            "selected_calibration": "off",
             "selected_tuning_mode": "off",
             "selected_tuning_iterations": 10,
             "selected_threshold": 0.5,
             "threshold_field": config.get("threshold_field"),
+            "calibration_field": config.get("calibration_field"),
             "selected_target": None,
             "selected_predictors": [],
             "error": None,
@@ -1677,6 +1923,12 @@ def populate_tab_from_request(tab):
             {"none", "winsorize", "remove_iqr"},
             "none",
         )
+        if tab.get("calibration_field"):
+            tab["selected_calibration"] = parse_choice(
+                request.form.get(tab["calibration_field"]),
+                {"off", "sigmoid", "isotonic"},
+                "off",
+            )
         tab["selected_tuning_mode"] = parse_choice(
             request.form.get(tab["tuning_mode_field"]),
             {"off", "grid", "random"},
@@ -1692,7 +1944,10 @@ CLASSIFICATION_MODEL_LABELS = {
     "logistic": "Logistic regression",
     "tree": "Tree model",
     "random_forest": "Random Forest",
+    "extra_trees": "Extra Trees",
     "gradient_boosting": "Gradient Boosting",
+    "naive_bayes": "Naive Bayes",
+    "elastic_net_logistic": "Elastic Net Logistic Regression",
     "svm": "Support Vector Machine",
     "knn": "kNN",
 }
@@ -1711,6 +1966,8 @@ def tuning_iterations(tab):
 
 
 def estimator_step_name(estimator, estimator_class):
+    if isinstance(estimator, CalibratedClassifierCV):
+        return f"estimator__{estimator_step_name(estimator.estimator, estimator_class)}"
     if hasattr(estimator, "named_steps"):
         for name, step in estimator.named_steps.items():
             if isinstance(step, estimator_class):
@@ -1722,12 +1979,24 @@ def classification_tuning_grid(model_name, estimator):
     if model_name == "logistic":
         prefix = estimator_step_name(estimator, LogisticRegression)
         return {f"{prefix}C": [0.1, 1.0, 10.0]}
+    if model_name == "elastic_net_logistic":
+        prefix = estimator_step_name(estimator, LogisticRegression)
+        return {f"{prefix}C": [0.1, 1.0, 10.0], f"{prefix}l1_ratio": [0.15, 0.5, 0.85]}
     if model_name == "tree":
-        return {"max_depth": [3, 4, 6, None], "min_samples_leaf": [1, 5, 10]}
+        prefix = estimator_step_name(estimator, DecisionTreeClassifier)
+        return {f"{prefix}max_depth": [3, 4, 6, None], f"{prefix}min_samples_leaf": [1, 5, 10]}
     if model_name == "random_forest":
-        return {"n_estimators": [100, 200], "max_depth": [None, 6, 10], "min_samples_leaf": [1, 5]}
+        prefix = estimator_step_name(estimator, RandomForestClassifier)
+        return {f"{prefix}n_estimators": [100, 200], f"{prefix}max_depth": [None, 6, 10], f"{prefix}min_samples_leaf": [1, 5]}
+    if model_name == "extra_trees":
+        prefix = estimator_step_name(estimator, ExtraTreesClassifier)
+        return {f"{prefix}n_estimators": [100, 200], f"{prefix}max_depth": [None, 6, 10], f"{prefix}min_samples_leaf": [1, 5]}
     if model_name == "gradient_boosting":
-        return {"n_estimators": [50, 100], "learning_rate": [0.05, 0.1, 0.2], "max_depth": [2, 3]}
+        prefix = estimator_step_name(estimator, GradientBoostingClassifier)
+        return {f"{prefix}n_estimators": [50, 100], f"{prefix}learning_rate": [0.05, 0.1, 0.2], f"{prefix}max_depth": [2, 3]}
+    if model_name == "naive_bayes":
+        prefix = estimator_step_name(estimator, GaussianNB)
+        return {f"{prefix}var_smoothing": [1e-9, 1e-8, 1e-7]}
     if model_name == "svm":
         prefix = estimator_step_name(estimator, SVC)
         return {f"{prefix}C": [0.5, 1.0, 2.0], f"{prefix}gamma": ["scale", "auto"]}
@@ -1785,7 +2054,7 @@ def normalized_search_params(params):
 
 
 def tune_classification_model(model_name, data, target, predictors, test_size, cv_folds, options, mode, iterations):
-    _, target_values, _, x_encoded = prepare_classification_data(data, target, predictors, binary_only=(model_name == "logistic"), options=options)
+    _, target_values, _, x_encoded = prepare_classification_data(data, target, predictors, binary_only=(model_name in {"logistic", "elastic_net_logistic"}), options=options)
     split = split_classification_data(target_values, x_encoded, test_size, options)
     min_class_count = int(pd.Series(split["y_train"]).value_counts().min())
     actual_folds = min(cv_folds if cv_folds > 1 else 3, min_class_count)
@@ -2574,7 +2843,7 @@ def build_classification_recommendation(tab, rows, best_model_name, detail_model
         actions.append("Collect more labeled rows before treating the comparison as final.")
     if not tuning_enabled(tab):
         actions.append("Enable hyperparameter tuning for the strongest candidate models.")
-    if tab.get("selected_scaling") == "off" and detail_model_name in {"logistic", "svm", "knn"}:
+    if tab.get("selected_scaling") == "off" and detail_model_name in {"logistic", "elastic_net_logistic", "svm", "knn"}:
         actions.append("Try feature scaling for models that depend on coefficient size, margins, or distance.")
     if any("accuracy is meaningfully higher than CV accuracy" in concern for concern in concerns):
         actions.append("Compare a simpler model and check for leakage-prone columns that encode the outcome.")
@@ -3025,6 +3294,7 @@ def save_pro_run(tab):
         "selected_scaling": tab.get("selected_scaling"),
         "selected_split_seed": tab.get("selected_split_seed"),
         "selected_outlier_handling": tab.get("selected_outlier_handling"),
+        "selected_calibration": tab.get("selected_calibration", "off"),
         "selected_tuning_mode": tab.get("selected_tuning_mode"),
         "selected_tuning_iterations": tab.get("selected_tuning_iterations"),
         "selected_threshold": tab.get("selected_threshold", 0.5),
@@ -3069,6 +3339,7 @@ def restore_pro_run(tab, snapshot):
         "selected_scaling",
         "selected_split_seed",
         "selected_outlier_handling",
+        "selected_calibration",
         "selected_tuning_mode",
         "selected_tuning_iterations",
         "selected_threshold",
@@ -3083,6 +3354,8 @@ def restore_pro_run(tab, snapshot):
         tab[key] = deepcopy(snapshot.get(key))
     if tab.get("selected_threshold") is None:
         tab["selected_threshold"] = 0.5
+    if tab.get("selected_calibration") is None:
+        tab["selected_calibration"] = "off"
     restore_download_artifacts(tab, snapshot)
     tab["report_download"] = pro_report_download(tab["form_name"])
     tab["report_pdf_download"] = pro_report_pdf_download(tab["form_name"])

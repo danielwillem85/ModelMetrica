@@ -59,6 +59,7 @@ class ReportRenderer:
             {"Field": "Feature scaling", "Value": preprocessing.get("Feature scaling", "-")},
             {"Field": "Split seed", "Value": snapshot.get("selected_split_seed", 42)},
             {"Field": "Outlier handling", "Value": preprocessing.get("Outlier handling", "-")},
+            {"Field": "Probability calibration", "Value": {"off": "Off", "sigmoid": "Sigmoid", "isotonic": "Isotonic"}.get(snapshot.get("selected_calibration", "off"), "Off") if tab_name == "pro_classification" else "-"},
             {"Field": "Hyperparameter tuning", "Value": {"off": "Off", "grid": "Grid search", "random": "Random search"}.get(snapshot.get("selected_tuning_mode", "off"), "Off")},
             {"Field": "Random search iterations", "Value": snapshot.get("selected_tuning_iterations", 10)},
             {"Field": "Decision threshold", "Value": f"{float(snapshot.get('selected_threshold') or 0.5):.3f}" if tab_name == "pro_classification" else "-"},

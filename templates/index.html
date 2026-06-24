@@ -13,7 +13,14 @@
                   <option value="logistic" {{ 'selected' if 'logistic' in tab.selected_models else '' }}>Logistic regression</option>
                   <option value="tree" {{ 'selected' if 'tree' in tab.selected_models else '' }}>Tree model</option>
                   <option value="random_forest" {{ 'selected' if 'random_forest' in tab.selected_models else '' }}>Random Forest</option>
+                  {% if tab.allow_model_comparison %}
+                  <option value="extra_trees" {{ 'selected' if 'extra_trees' in tab.selected_models else '' }}>Extra Trees</option>
+                  {% endif %}
                   <option value="gradient_boosting" {{ 'selected' if 'gradient_boosting' in tab.selected_models else '' }}>Gradient Boosting</option>
+                  {% if tab.allow_model_comparison %}
+                  <option value="naive_bayes" {{ 'selected' if 'naive_bayes' in tab.selected_models else '' }}>Naive Bayes</option>
+                  <option value="elastic_net_logistic" {{ 'selected' if 'elastic_net_logistic' in tab.selected_models else '' }}>Elastic Net Logistic Regression</option>
+                  {% endif %}
                   <option value="svm" {{ 'selected' if 'svm' in tab.selected_models else '' }}>Support Vector Machine</option>
                   <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN</option>
                 </select>
@@ -26,7 +33,10 @@
                   <option value="logistic" {{ 'selected' if tab.selected_detail_model == 'logistic' else '' }}>Logistic regression</option>
                   <option value="tree" {{ 'selected' if tab.selected_detail_model == 'tree' else '' }}>Tree model</option>
                   <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest</option>
+                  <option value="extra_trees" {{ 'selected' if tab.selected_detail_model == 'extra_trees' else '' }}>Extra Trees</option>
                   <option value="gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'gradient_boosting' else '' }}>Gradient Boosting</option>
+                  <option value="naive_bayes" {{ 'selected' if tab.selected_detail_model == 'naive_bayes' else '' }}>Naive Bayes</option>
+                  <option value="elastic_net_logistic" {{ 'selected' if tab.selected_detail_model == 'elastic_net_logistic' else '' }}>Elastic Net Logistic Regression</option>
                   <option value="svm" {{ 'selected' if tab.selected_detail_model == 'svm' else '' }}>Support Vector Machine</option>
                   <option value="knn" {{ 'selected' if tab.selected_detail_model == 'knn' else '' }}>kNN</option>
                 </select>
@@ -47,7 +57,7 @@
                     <option value="{{ column }}" {{ 'selected' if column in tab.selected_predictors else '' }}>{{ column }}</option>
                   {% endfor %}
                 </select>
-                <p>Select one or more predictors. Logistic regression requires exactly two target classes.</p>
+                <p>Select one or more predictors. Logistic and Elastic Net Logistic require exactly two target classes.</p>
               </div>
               <div>
                 <label for="{{ tab.test_size_field }}">Test set size</label>
@@ -103,6 +113,16 @@
                   <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
                 </select>
               </div>
+              {% if tab.calibration_field %}
+              <div>
+                <label for="{{ tab.calibration_field }}">Probability calibration</label>
+                <select id="{{ tab.calibration_field }}" name="{{ tab.calibration_field }}" required>
+                  <option value="off" {{ 'selected' if tab.selected_calibration == 'off' else '' }}>Off</option>
+                  <option value="sigmoid" {{ 'selected' if tab.selected_calibration == 'sigmoid' else '' }}>Sigmoid</option>
+                  <option value="isotonic" {{ 'selected' if tab.selected_calibration == 'isotonic' else '' }}>Isotonic</option>
+                </select>
+              </div>
+              {% endif %}
               <div>
                 <label for="{{ tab.tuning_mode_field }}">Hyperparameter tuning</label>
                 <select id="{{ tab.tuning_mode_field }}" name="{{ tab.tuning_mode_field }}" required>
