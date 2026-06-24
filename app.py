@@ -163,6 +163,15 @@ PAGE_TEMPLATE = """
                 <label for="{{ tab.tuning_iterations_field }}">Random search iterations</label>
                 <input id="{{ tab.tuning_iterations_field }}" name="{{ tab.tuning_iterations_field }}" type="number" min="3" max="30" step="1" value="{{ tab.selected_tuning_iterations }}" required>
               </div>
+              {% if tab.threshold_field %}
+              <div>
+                <label for="{{ tab.threshold_field }}">Decision threshold</label>
+                <div class="threshold-control">
+                  <input id="{{ tab.threshold_field }}" name="{{ tab.threshold_field }}" type="range" min="0.05" max="0.95" step="0.01" value="{{ '%.2f'|format(tab.selected_threshold) }}" data-threshold-input>
+                  <output for="{{ tab.threshold_field }}" data-threshold-output>{{ '%.2f'|format(tab.selected_threshold) }}</output>
+                </div>
+              </div>
+              {% endif %}
               {% endif %}
               <div>
                 <button type="submit">Run</button>
@@ -295,6 +304,12 @@ PAGE_TEMPLATE = """
               <h3>Precision-recall curve</h3>
               <div class="tree-plot">
                 <img src="data:image/png;base64,{{ tab.output.pr_plot }}" alt="Precision-recall curve">
+              </div>
+            {% endif %}
+            {% if tab.output.selected_threshold_html %}
+              <h3>Selected threshold metrics</h3>
+              <div class="table-wrap">
+                {{ tab.output.selected_threshold_html|safe }}
               </div>
             {% endif %}
             {% if tab.output.threshold_html %}
@@ -876,6 +891,24 @@ PAGE_TEMPLATE = """
       .status-badge.fit {
         background: #f8fafc;
       }
+      .threshold-control {
+        align-items: center;
+        display: grid;
+        gap: 12px;
+        grid-template-columns: minmax(180px, 1fr) 64px;
+      }
+      .threshold-control input[type="range"] {
+        accent-color: var(--accent);
+      }
+      .threshold-control output {
+        background: #f8fafc;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        font-variant-numeric: tabular-nums;
+        font-weight: 750;
+        padding: 8px 10px;
+        text-align: center;
+      }
       @media (max-width: 760px) {
         .metric-row {
           grid-template-columns: 1fr;
@@ -1029,6 +1062,18 @@ PAGE_TEMPLATE = """
           detailSelect.value = row.dataset.modelName;
           form.requestSubmit ? form.requestSubmit() : form.submit();
         });
+      });
+
+      document.querySelectorAll("[data-threshold-input]").forEach((input) => {
+        const output = input.closest(".threshold-control")?.querySelector("[data-threshold-output]");
+        const update = () => {
+          if (output) {
+            output.value = Number(input.value).toFixed(2);
+            output.textContent = Number(input.value).toFixed(2);
+          }
+        };
+        input.addEventListener("input", update);
+        update();
       });
 
       if (window.location.hash) {
@@ -1439,6 +1484,14 @@ def parse_cv_folds(value):
     except (TypeError, ValueError):
         return 0
     return folds if folds in {3, 5, 10} else 0
+
+
+def parse_threshold(value):
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        return 0.5
+    return min(max(threshold, 0.05), 0.95)
 
 
 def parse_choice(value, allowed, default):
@@ -2542,6 +2595,7 @@ CLASSIFICATION_TAB_CONFIGS = {
         "outlier_handling_field": "pro_classification_outlier_handling",
         "tuning_mode_field": "pro_classification_tuning_mode",
         "tuning_iterations_field": "pro_classification_tuning_iterations",
+        "threshold_field": "pro_classification_threshold",
         "default_model": "logistic",
         "allow_model_comparison": True,
     },
@@ -2597,6 +2651,8 @@ def make_model_tab(config):
             "selected_outlier_handling": "none",
             "selected_tuning_mode": "off",
             "selected_tuning_iterations": 10,
+            "selected_threshold": 0.5,
+            "threshold_field": config.get("threshold_field"),
             "selected_target": None,
             "selected_predictors": [],
             "error": None,
@@ -2686,6 +2742,8 @@ def populate_tab_from_request(tab):
             "off",
         )
         tab["selected_tuning_iterations"] = parse_tuning_iterations(request.form.get(tab["tuning_iterations_field"]))
+        if tab.get("threshold_field"):
+            tab["selected_threshold"] = parse_threshold(request.form.get(tab["threshold_field"]))
     tab["selected_target"] = request.form.get(tab["target_field"])
     tab["selected_predictors"] = request.form.getlist(tab["predictors_field"])
 
@@ -2940,29 +2998,69 @@ def classification_score_values(estimator, x_test):
     raise ValueError("The selected model does not expose probability or decision scores.")
 
 
-def threshold_analysis_table(y_true, scores):
+def threshold_metrics(y_true, scores, threshold):
+    predicted = scores >= threshold
+    true_positive = int(np.sum((predicted == 1) & (y_true == 1)))
+    true_negative = int(np.sum((predicted == 0) & (y_true == 0)))
+    false_positive = int(np.sum((predicted == 1) & (y_true == 0)))
+    false_negative = int(np.sum((predicted == 0) & (y_true == 1)))
+    total = len(y_true)
+    accuracy = (true_positive + true_negative) / total if total else 0.0
+    precision = true_positive / (true_positive + false_positive) if (true_positive + false_positive) else 0.0
+    recall = true_positive / (true_positive + false_negative) if (true_positive + false_negative) else 0.0
+    specificity = true_negative / (true_negative + false_positive) if (true_negative + false_positive) else 0.0
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+    return {
+        "threshold": threshold,
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "specificity": specificity,
+        "f1": f1,
+        "predicted_positive_rate": float(np.mean(predicted)) if total else 0.0,
+        "predicted": predicted,
+    }
+
+
+def threshold_metrics_frame(metrics):
+    return pd.DataFrame(
+        [
+            {"Metric": "Threshold", "Value": f"{metrics['threshold']:.2f}"},
+            {"Metric": "Accuracy", "Value": f"{metrics['accuracy']:.3f}"},
+            {"Metric": "Precision", "Value": f"{metrics['precision']:.3f}"},
+            {"Metric": "Recall", "Value": f"{metrics['recall']:.3f}"},
+            {"Metric": "Specificity", "Value": f"{metrics['specificity']:.3f}"},
+            {"Metric": "F1", "Value": f"{metrics['f1']:.3f}"},
+            {"Metric": "Predicted positive", "Value": f"{metrics['predicted_positive_rate']:.1%}"},
+        ]
+    )
+
+
+def threshold_analysis_table(y_true, scores, selected_threshold=0.5):
     rows = []
-    for threshold in np.arange(0.1, 1.0, 0.1):
-        predicted = scores >= threshold
-        true_positive = int(np.sum((predicted == 1) & (y_true == 1)))
-        false_positive = int(np.sum((predicted == 1) & (y_true == 0)))
-        false_negative = int(np.sum((predicted == 0) & (y_true == 1)))
-        precision = true_positive / (true_positive + false_positive) if (true_positive + false_positive) else 0.0
-        recall = true_positive / (true_positive + false_negative) if (true_positive + false_negative) else 0.0
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+    thresholds = sorted({round(float(threshold), 2) for threshold in np.arange(0.1, 1.0, 0.1)} | {round(float(selected_threshold), 2)})
+    threshold_results = [threshold_metrics(y_true, scores, threshold) for threshold in thresholds]
+    best_f1 = max((result["f1"] for result in threshold_results), default=0.0)
+    for result in threshold_results:
+        threshold = result["threshold"]
+        is_selected = math.isclose(threshold, selected_threshold, abs_tol=0.005)
+        is_best = math.isclose(result["f1"], best_f1, abs_tol=1e-12)
         rows.append(
             {
-                "Threshold": f"{threshold:.1f}",
-                "Precision": f"{precision:.3f}",
-                "Recall": f"{recall:.3f}",
-                "F1": f"{f1:.3f}",
-                "Predicted positive": f"{np.mean(predicted):.1%}",
+                "Threshold": f"{threshold:.2f}",
+                "Accuracy": f"{result['accuracy']:.3f}",
+                "Precision": f"{result['precision']:.3f}",
+                "Recall": f"{result['recall']:.3f}",
+                "Specificity": f"{result['specificity']:.3f}",
+                "F1": f"{result['f1']:.3f}",
+                "Predicted positive": f"{result['predicted_positive_rate']:.1%}",
+                "Status": "Selected / Best F1" if is_selected and is_best else "Selected" if is_selected else "Best F1" if is_best else "",
             }
         )
     return pd.DataFrame(rows)
 
 
-def add_binary_classification_analytics(output, data, target, predictors, model_name, test_size, options=None):
+def add_binary_classification_analytics(output, data, target, predictors, model_name, test_size, threshold=0.5, options=None):
     try:
         _, target_values, classes, x_encoded = prepare_classification_data(data, target, predictors, binary_only=True, options=options)
         split = split_classification_data(target_values, x_encoded, test_size, options)
@@ -2970,12 +3068,17 @@ def add_binary_classification_analytics(output, data, target, predictors, model_
         estimator.fit(split["x_train"], split["y_train"])
         scores = classification_score_values(estimator, split["x_test"])
         y_true = split["y_test"]
+        threshold = parse_threshold(threshold)
 
         fpr, tpr, _ = roc_curve(y_true, scores)
         roc_auc = auc(fpr, tpr)
         precision, recall, _ = precision_recall_curve(y_true, scores)
         average_precision = average_precision_score(y_true, scores)
-        threshold_table = threshold_analysis_table(y_true, scores)
+        selected_threshold_metrics = threshold_metrics(y_true, scores, threshold)
+        threshold_table = threshold_analysis_table(y_true, scores, threshold)
+        selected_labels = np.where(selected_threshold_metrics["predicted"], classes[1], classes[0])
+        selected_confusion = confusion_table(split["target_test"].to_numpy(), selected_labels)
+        selected_threshold_frame = threshold_metrics_frame(selected_threshold_metrics)
 
         output["roc_plot"] = line_plot_image(
             fpr,
@@ -2994,10 +3097,20 @@ def add_binary_classification_analytics(output, data, target, predictors, model_
             "Precision-recall curve",
             annotation=f"Avg. precision = {average_precision:.3f}",
         )
+        output["confusion_html"] = selected_confusion.to_html(border=0, classes="confusion")
+        output["selected_threshold_html"] = selected_threshold_frame.to_html(index=False, border=0, classes="selected-threshold")
         output["threshold_html"] = threshold_table.to_html(index=False, border=0, classes="threshold-analysis")
+        output.setdefault("download_data", {})["confusion_matrix"] = selected_confusion.to_csv()
+        output.setdefault("download_data", {})["selected_threshold_metrics"] = selected_threshold_frame.to_csv(index=False)
         output.setdefault("download_data", {})["threshold_analysis"] = threshold_table.to_csv(index=False)
         output.setdefault("metrics", []).extend(
             [
+                {"label": "Decision threshold", "value": f"{threshold:.2f}"},
+                {"label": "Threshold accuracy", "value": f"{selected_threshold_metrics['accuracy']:.3f}"},
+                {"label": "Threshold precision", "value": f"{selected_threshold_metrics['precision']:.3f}"},
+                {"label": "Threshold recall", "value": f"{selected_threshold_metrics['recall']:.3f}"},
+                {"label": "Threshold specificity", "value": f"{selected_threshold_metrics['specificity']:.3f}"},
+                {"label": "Threshold F1", "value": f"{selected_threshold_metrics['f1']:.3f}"},
                 {"label": "ROC AUC", "value": f"{roc_auc:.3f}"},
                 {"label": "Avg. precision", "value": f"{average_precision:.3f}"},
             ]
@@ -3005,6 +3118,7 @@ def add_binary_classification_analytics(output, data, target, predictors, model_
     except Exception:
         output["roc_plot"] = None
         output["pr_plot"] = None
+        output["selected_threshold_html"] = None
         output["threshold_html"] = None
     return output
 
@@ -3498,6 +3612,7 @@ def handle_classification_comparison_submission(tab, dataset):
             tab["selected_predictors"],
             detail_model_name,
             tab["selected_test_size"],
+            tab.get("selected_threshold", 0.5),
             detail_options,
         )
         detail_output = add_cv_diagnostics(detail_output, tab, dataset["data"], detail_model_name, detail_options)
@@ -3668,6 +3783,7 @@ def save_pro_run(tab):
         "selected_outlier_handling": tab.get("selected_outlier_handling"),
         "selected_tuning_mode": tab.get("selected_tuning_mode"),
         "selected_tuning_iterations": tab.get("selected_tuning_iterations"),
+        "selected_threshold": tab.get("selected_threshold", 0.5),
         "selected_target": tab.get("selected_target"),
         "selected_predictors": list(tab.get("selected_predictors", [])),
         "comparison_html": tab.get("comparison_html"),
@@ -3710,6 +3826,7 @@ def restore_pro_run(tab, snapshot):
         "selected_outlier_handling",
         "selected_tuning_mode",
         "selected_tuning_iterations",
+        "selected_threshold",
         "selected_target",
         "selected_predictors",
         "comparison_html",
@@ -3718,6 +3835,8 @@ def restore_pro_run(tab, snapshot):
         "output",
     ]:
         tab[key] = deepcopy(snapshot.get(key))
+    if tab.get("selected_threshold") is None:
+        tab["selected_threshold"] = 0.5
     restore_download_artifacts(tab, snapshot)
     tab["report_download"] = pro_report_download(tab["form_name"])
     tab["report_pdf_download"] = pro_report_pdf_download(tab["form_name"])
@@ -4089,6 +4208,7 @@ def report_metadata_rows(tab_name, snapshot, dataset):
         {"Field": "Outlier handling", "Value": preprocessing_details(snapshot).get("Outlier handling", "-")},
         {"Field": "Hyperparameter tuning", "Value": {"off": "Off", "grid": "Grid search", "random": "Random search"}.get(snapshot.get("selected_tuning_mode", "off"), "Off")},
         {"Field": "Random search iterations", "Value": snapshot.get("selected_tuning_iterations", 10)},
+        {"Field": "Decision threshold", "Value": f"{float(snapshot.get('selected_threshold') or 0.5):.2f}" if tab_name == "pro_classification" else "-"},
     ]
 
 
@@ -4177,6 +4297,9 @@ def pro_report_html(tab_name, snapshot, dataset):
                 report_image("Classification tree", output.get("tree_plot"), "Classification tree"),
             ]
         )
+        selected_threshold_table = csv_report_table(artifacts.get("selected_threshold_metrics"))
+        if selected_threshold_table:
+            sections.extend(["<section><h2>Selected threshold metrics</h2>", selected_threshold_table, "</section>"])
         threshold_table = csv_report_table(artifacts.get("threshold_analysis"))
         if threshold_table:
             sections.extend(["<section><h2>Threshold analysis</h2>", threshold_table, "</section>"])
@@ -4334,6 +4457,7 @@ def pro_report_pdf_bytes(tab_name, snapshot, dataset):
             add_pdf_image_page(pdf, "ROC Curve", output.get("roc_plot"))
             add_pdf_image_page(pdf, "Precision-Recall Curve", output.get("pr_plot"))
             add_pdf_image_page(pdf, "Classification Tree", output.get("tree_plot"))
+            add_pdf_table_pages(pdf, "Selected Threshold Metrics", csv_report_frame(artifacts.get("selected_threshold_metrics")), rows_per_page=24)
             add_pdf_table_pages(pdf, "Threshold Analysis", csv_report_frame(artifacts.get("threshold_analysis")), rows_per_page=24)
         else:
             add_pdf_image_page(pdf, "Predicted vs Actual", output.get("predicted_actual_plot"))
