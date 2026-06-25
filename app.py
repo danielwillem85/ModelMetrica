@@ -736,7 +736,7 @@ def classification_estimator(model_name, options=None):
         return with_probability_calibration(estimator, options)
     if model_name == "passive_aggressive":
         model = SGDClassifier(
-            loss=tuned_param(options, "passive_aggressive", "loss", "hinge"),
+            loss="hinge",
             penalty=None,
             learning_rate="pa1",
             eta0=tuned_float(options, "passive_aggressive", "eta0", 1.0),
@@ -2764,7 +2764,7 @@ def classification_tuning_grid(model_name, estimator):
         }
     if model_name == "passive_aggressive":
         prefix = estimator_step_name(estimator, SGDClassifier)
-        return {f"{prefix}eta0": [0.1, 1.0, 10.0], f"{prefix}loss": ["hinge", "squared_hinge"]}
+        return {f"{prefix}eta0": [0.1, 1.0, 10.0]}
     if model_name == "svm":
         prefix = estimator_step_name(estimator, SVC)
         return {f"{prefix}C": [0.5, 1.0, 2.0], f"{prefix}gamma": ["scale", "auto"]}
