@@ -206,6 +206,47 @@ class ReportRenderer:
         text = "" if pd.isna(value) else str(value)
         return "\n".join(textwrap.wrap(text, width=width, break_long_words=False)) or text
 
+    def pdf_column_wrap_width(self, column_count):
+        if column_count <= 2:
+            return 44
+        if column_count <= 4:
+            return 28
+        return 20
+
+    def pdf_row_line_count(self, row):
+        return max((str(value).count("\n") + 1 for value in row), default=1)
+
+    def pdf_row_height_units(self, line_count):
+        return max(1.0, line_count * 1.35 + 0.35)
+
+    def pdf_table_chunks(self, frame, max_line_units):
+        chunk_rows = []
+        chunk_units = 0
+        for _, row in frame.iterrows():
+            values = list(row)
+            row_units = self.pdf_row_height_units(self.pdf_row_line_count(values))
+            if chunk_rows and chunk_units + row_units > max_line_units:
+                yield pd.DataFrame(chunk_rows, columns=frame.columns)
+                chunk_rows = []
+                chunk_units = 0
+            chunk_rows.append(values)
+            chunk_units += row_units
+        if chunk_rows:
+            yield pd.DataFrame(chunk_rows, columns=frame.columns)
+
+    def pdf_column_groups(self, frame, max_columns=6):
+        columns = list(frame.columns)
+        if len(columns) <= max_columns:
+            return [columns]
+
+        pinned = [column for column in ["Model", "Status"] if column in columns]
+        remaining = [column for column in columns if column not in pinned]
+        group_size = max(1, max_columns - len(pinned))
+        groups = []
+        for start in range(0, len(remaining), group_size):
+            groups.append(pinned + remaining[start : start + group_size])
+        return groups
+
     def add_pdf_text_page(self, pdf, title, lines):
         fig, ax = plt.subplots(figsize=(11, 8.5))
         ax.axis("off")
@@ -230,32 +271,103 @@ class ReportRenderer:
             return
 
         frame = self.display_frame(frame).copy().fillna("")
-        for start in range(0, len(frame), rows_per_page):
-            chunk = frame.iloc[start : start + rows_per_page].copy()
-            for column in chunk.columns:
-                chunk[column] = chunk[column].map(lambda value: self.wrap_pdf_value(value, width=24))
+        column_groups = self.pdf_column_groups(frame)
+        prepared_pages = []
+        for group_index, columns in enumerate(column_groups, start=1):
+            group_frame = frame[columns].copy()
+            wrap_width = self.pdf_column_wrap_width(len(group_frame.columns))
+            wrapped = group_frame.copy()
+            for column in wrapped.columns:
+                wrapped[column] = wrapped[column].map(lambda value: self.wrap_pdf_value(value, width=wrap_width))
 
+            chunks = list(self.pdf_table_chunks(wrapped, max_line_units=rows_per_page))
+            rendered_rows = 0
+            for chunk in chunks:
+                prepared_pages.append(
+                    self.prepare_pdf_table_block(
+                        chunk.copy(),
+                        len(group_frame),
+                        rendered_rows,
+                        len(chunks),
+                        group_index,
+                        len(column_groups),
+                    )
+                )
+                rendered_rows += len(chunk)
+
+        if len(column_groups) > 1 and self.pdf_blocks_fit_on_single_page(prepared_pages):
             fig, ax = plt.subplots(figsize=(11, 8.5))
             ax.axis("off")
-            suffix = f" ({start + 1}-{start + len(chunk)} of {len(frame)})" if len(frame) > rows_per_page else ""
-            ax.text(0.02, 0.97, f"{title}{suffix}", fontsize=16, weight="bold", va="top")
-            table = ax.table(
-                cellText=chunk.values,
-                colLabels=list(chunk.columns),
-                cellLoc="left",
-                loc="center",
-                bbox=[0.02, 0.05, 0.96, 0.84],
-            )
-            table.auto_set_font_size(False)
-            table.set_fontsize(7.0 if len(chunk.columns) > 6 else 8.2)
-            table.scale(1, 1.25)
-            for (row, _), cell in table.get_celld().items():
-                if row == 0:
-                    cell.set_facecolor("#f1f5f9")
-                    cell.set_text_props(weight="bold")
-                cell.set_edgecolor("#d8dee8")
+            ax.text(0.02, 0.97, title, fontsize=16, weight="bold", va="top")
+            current_top = 0.89
+            for block in prepared_pages:
+                block_title = block["suffix"].strip()
+                if block_title:
+                    ax.text(0.02, current_top, block_title, fontsize=9.5, weight="bold", color="#475569", va="top")
+                    current_top -= 0.032
+                self.draw_pdf_table_block(ax, block, current_top)
+                current_top -= block["table_height"] + 0.055
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
+            return
+
+        for block in prepared_pages:
+            fig, ax = plt.subplots(figsize=(11, 8.5))
+            ax.axis("off")
+            ax.text(0.02, 0.97, f"{title}{block['suffix']}", fontsize=16, weight="bold", va="top")
+            self.draw_pdf_table_block(ax, block, 0.89)
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    def prepare_pdf_table_block(self, chunk, total_rows, rendered_rows, chunk_count, group_index, group_count):
+        chunk = chunk.copy()
+        row_line_counts = [self.pdf_row_line_count(row) for row in chunk.to_numpy()]
+        suffix_parts = []
+        if chunk_count > 1:
+            suffix_parts.append(f"{rendered_rows + 1}-{rendered_rows + len(chunk)} of {total_rows}")
+        if group_count > 1:
+            suffix_parts.append(f"columns {group_index} of {group_count}")
+        header_units = 1.25
+        row_units = [self.pdf_row_height_units(count) for count in row_line_counts]
+        total_units = header_units + sum(row_units)
+        return {
+            "chunk": chunk,
+            "suffix": f" ({'; '.join(suffix_parts)})" if suffix_parts else "",
+            "header_units": header_units,
+            "row_units": row_units,
+            "total_units": total_units,
+            "table_height": min(0.84, max(0.18, total_units * 0.038)),
+        }
+
+    def pdf_blocks_fit_on_single_page(self, blocks):
+        if not blocks:
+            return False
+        needed_height = sum(block["table_height"] for block in blocks)
+        needed_height += 0.055 * max(0, len(blocks) - 1)
+        needed_height += 0.032 * sum(1 for block in blocks if block["suffix"])
+        return needed_height <= 0.82
+
+    def draw_pdf_table_block(self, ax, block, top):
+        chunk = block["chunk"]
+        table_height = block["table_height"]
+        table_bottom = top - table_height
+        table = ax.table(
+            cellText=chunk.values,
+            colLabels=list(chunk.columns),
+            cellLoc="left",
+            loc="center",
+            bbox=[0.02, table_bottom, 0.96, table_height],
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(7.0 if len(chunk.columns) > 6 else 8.2)
+        for (row, column), cell in table.get_celld().items():
+            if row == 0:
+                cell.set_facecolor("#f1f5f9")
+                cell.set_text_props(weight="bold")
+                cell.set_height(table_height * block["header_units"] / block["total_units"])
+            else:
+                cell.set_height(table_height * block["row_units"][row - 1] / block["total_units"])
+            cell.set_edgecolor("#d8dee8")
 
     def add_pdf_image_page(self, pdf, title, image_data):
         if not image_data:
