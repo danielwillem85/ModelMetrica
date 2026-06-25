@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+from secrets import randbelow
 from uuid import uuid4
 
 import matplotlib
@@ -18,17 +19,23 @@ import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
 from flask import Flask, Response, redirect, render_template, request, session, url_for
 from sklearn.ensemble import (
+    AdaBoostClassifier,
+    ExtraTreesRegressor,
     ExtraTreesClassifier,
     GradientBoostingClassifier,
     GradientBoostingRegressor,
+    HistGradientBoostingClassifier,
     RandomForestClassifier,
     RandomForestRegressor,
 )
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
+from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.inspection import permutation_importance
-from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
+from sklearn.linear_model import ElasticNet, HuberRegressor, Lasso, LinearRegression, LogisticRegression, Ridge, SGDClassifier
 from sklearn.metrics import accuracy_score, average_precision_score, auc, precision_recall_curve, roc_curve
 from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.naive_bayes import GaussianNB
+from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -50,9 +57,10 @@ from payments import PaymentService, SUBSCRIPTION_AMOUNT, SUBSCRIPTION_CURRENCY,
 from reports import ReportRenderer
 
 try:
-    from lightgbm import LGBMClassifier
+    from lightgbm import LGBMClassifier, LGBMRegressor
 except ImportError:
     LGBMClassifier = None
+    LGBMRegressor = None
 
 
 try:
@@ -82,6 +90,7 @@ DATASETS = {}
 DOWNLOADS = {}
 DISPLAY_DECIMALS = 3
 DISPLAY_FLOAT_FORMAT = f"{{:.{DISPLAY_DECIMALS}f}}".format
+MAX_SPLIT_SEED = 999999
 
 
 def allowed_file(filename: str) -> bool:
@@ -228,11 +237,14 @@ def normal_two_sided_pvalue(z_value):
 
 
 def preprocessing_options(tab):
+    split_seed = tab.get("selected_split_seed")
+    if split_seed is None:
+        split_seed = random_split_seed()
     return {
         "missing_values": tab.get("selected_missing_values", "drop"),
         "categorical_encoding": tab.get("selected_categorical_encoding", "one_hot_drop_first"),
         "scaling": tab.get("selected_scaling", "on"),
-        "split_seed": tab.get("selected_split_seed", 42),
+        "split_seed": split_seed,
         "outlier_handling": tab.get("selected_outlier_handling", "none"),
         "calibration": tab.get("selected_calibration", "off"),
         "tuned_params": tab.get("tuned_params", {}),
@@ -260,7 +272,7 @@ def tuned_int(options, model_name, param_name, default):
 
 def preprocessing_seed(options):
     options = options or {}
-    return int(options.get("split_seed", options.get("selected_split_seed", 42)))
+    return int(options.get("split_seed", options.get("selected_split_seed", random_split_seed())))
 
 
 def scaling_enabled(options):
@@ -424,7 +436,7 @@ def parse_test_size(value):
         test_size = float(value)
     except (TypeError, ValueError):
         test_size = 0.2
-    return min(max(test_size, 0.1), 0.5)
+    return min(max(test_size, 0.2), 0.8)
 
 
 def parse_cv_folds(value):
@@ -447,12 +459,16 @@ def parse_choice(value, allowed, default):
     return value if value in allowed else default
 
 
+def random_split_seed():
+    return randbelow(MAX_SPLIT_SEED + 1)
+
+
 def parse_split_seed(value):
     try:
         seed = int(value)
     except (TypeError, ValueError):
-        return 42
-    return min(max(seed, 0), 999999)
+        return random_split_seed()
+    return min(max(seed, 0), MAX_SPLIT_SEED)
 
 def parse_tuning_iterations(value):
     try:
@@ -558,6 +574,20 @@ def classification_estimator(model_name, options=None):
             max_depth=tuned_int(options, "gradient_boosting", "max_depth", 3),
             random_state=preprocessing_seed(options),
         ), options)
+    if model_name == "adaboost":
+        return with_probability_calibration(AdaBoostClassifier(
+            n_estimators=tuned_int(options, "adaboost", "n_estimators", 100),
+            learning_rate=tuned_float(options, "adaboost", "learning_rate", 0.5),
+            random_state=preprocessing_seed(options),
+        ), options)
+    if model_name == "hist_gradient_boosting":
+        return with_probability_calibration(HistGradientBoostingClassifier(
+            max_iter=tuned_int(options, "hist_gradient_boosting", "max_iter", 100),
+            learning_rate=tuned_float(options, "hist_gradient_boosting", "learning_rate", 0.1),
+            max_leaf_nodes=tuned_int(options, "hist_gradient_boosting", "max_leaf_nodes", 31),
+            l2_regularization=tuned_float(options, "hist_gradient_boosting", "l2_regularization", 0.0),
+            random_state=preprocessing_seed(options),
+        ), options)
     if model_name == "lightgbm":
         if LGBMClassifier is None:
             raise RuntimeError("LightGBM is not installed. Run pip install lightgbm or install requirements.txt.")
@@ -575,6 +605,50 @@ def classification_estimator(model_name, options=None):
         return with_probability_calibration(GaussianNB(
             var_smoothing=tuned_float(options, "naive_bayes", "var_smoothing", 1e-9),
         ), options)
+    if model_name == "lda":
+        return with_probability_calibration(LinearDiscriminantAnalysis(
+            solver="lsqr",
+            shrinkage=tuned_param(options, "lda", "shrinkage", "auto"),
+        ), options)
+    if model_name == "qda":
+        return with_probability_calibration(QuadraticDiscriminantAnalysis(
+            reg_param=tuned_float(options, "qda", "reg_param", 0.1),
+        ), options)
+    if model_name == "gaussian_process":
+        model = GaussianProcessClassifier(
+            max_iter_predict=tuned_int(options, "gaussian_process", "max_iter_predict", 100),
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+        )
+        estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        return with_probability_calibration(estimator, options)
+    if model_name == "mlp":
+        hidden_layer_sizes = tuned_param(options, "mlp", "hidden_layer_sizes", (50,))
+        if isinstance(hidden_layer_sizes, list):
+            hidden_layer_sizes = tuple(hidden_layer_sizes)
+        model = MLPClassifier(
+            hidden_layer_sizes=hidden_layer_sizes,
+            alpha=tuned_float(options, "mlp", "alpha", 0.0001),
+            learning_rate_init=tuned_float(options, "mlp", "learning_rate_init", 0.001),
+            max_iter=1000,
+            early_stopping=True,
+            n_iter_no_change=10,
+            random_state=preprocessing_seed(options),
+        )
+        estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        return with_probability_calibration(estimator, options)
+    if model_name == "passive_aggressive":
+        model = SGDClassifier(
+            loss=tuned_param(options, "passive_aggressive", "loss", "hinge"),
+            penalty=None,
+            learning_rate="pa1",
+            eta0=tuned_float(options, "passive_aggressive", "eta0", 1.0),
+            max_iter=1000,
+            random_state=preprocessing_seed(options),
+            tol=1e-3,
+        )
+        estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        return with_probability_calibration(estimator, options)
     if model_name == "svm":
         model = SVC(
             kernel="rbf",
@@ -608,11 +682,34 @@ def regression_estimator(model_name, options=None):
             random_state=preprocessing_seed(options),
         )
         return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+    if model_name == "elastic_net":
+        model = ElasticNet(
+            alpha=tuned_float(options, "elastic_net", "alpha", 0.1),
+            l1_ratio=tuned_float(options, "elastic_net", "l1_ratio", 0.5),
+            max_iter=10000,
+            random_state=preprocessing_seed(options),
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+    if model_name == "huber":
+        model = HuberRegressor(
+            epsilon=tuned_float(options, "huber", "epsilon", 1.35),
+            alpha=tuned_float(options, "huber", "alpha", 0.0001),
+            max_iter=1000,
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     if model_name == "random_forest":
         return RandomForestRegressor(
             n_estimators=tuned_int(options, "random_forest", "n_estimators", 200),
             max_depth=tuned_param(options, "random_forest", "max_depth", None),
             min_samples_leaf=tuned_int(options, "random_forest", "min_samples_leaf", 1),
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+        )
+    if model_name == "extra_trees":
+        return ExtraTreesRegressor(
+            n_estimators=tuned_int(options, "extra_trees", "n_estimators", 200),
+            max_depth=tuned_param(options, "extra_trees", "max_depth", None),
+            min_samples_leaf=tuned_int(options, "extra_trees", "min_samples_leaf", 1),
             random_state=preprocessing_seed(options),
             n_jobs=-1,
         )
@@ -622,6 +719,19 @@ def regression_estimator(model_name, options=None):
             learning_rate=tuned_float(options, "gradient_boosting", "learning_rate", 0.1),
             max_depth=tuned_int(options, "gradient_boosting", "max_depth", 3),
             random_state=preprocessing_seed(options),
+        )
+    if model_name == "lightgbm":
+        if LGBMRegressor is None:
+            raise RuntimeError("LightGBM is not installed. Run pip install lightgbm or install requirements.txt.")
+        return LGBMRegressor(
+            n_estimators=tuned_int(options, "lightgbm", "n_estimators", 200),
+            learning_rate=tuned_float(options, "lightgbm", "learning_rate", 0.05),
+            num_leaves=tuned_int(options, "lightgbm", "num_leaves", 31),
+            max_depth=tuned_int(options, "lightgbm", "max_depth", -1),
+            min_child_samples=tuned_int(options, "lightgbm", "min_child_samples", 20),
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+            verbosity=-1,
         )
     if model_name == "svr":
         model = SVR(
@@ -1358,6 +1468,34 @@ def fit_lightgbm_model(data, target, predictors, test_size, cv_folds, options=No
     }
 
 
+def fit_adaboost_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "adaboost", "AdaBoost", options)
+
+
+def fit_hist_gradient_boosting_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "hist_gradient_boosting", "Hist Gradient Boosting", options)
+
+
+def fit_lda_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "lda", "Linear Discriminant Analysis", options)
+
+
+def fit_qda_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "qda", "Quadratic Discriminant Analysis", options)
+
+
+def fit_gaussian_process_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "gaussian_process", "Gaussian Process", options)
+
+
+def fit_mlp_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "mlp", "MLP Neural Network", options)
+
+
+def fit_passive_aggressive_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "passive_aggressive", "Passive Aggressive", options)
+
+
 def fit_elastic_net_logistic_regression(data, target, predictors, test_size, cv_folds, options=None):
     if calibration_enabled(options):
         return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "elastic_net_logistic", "Elastic Net Logistic Regression", options, binary_only=True)
@@ -1634,6 +1772,96 @@ def fit_lasso_regression(data, target, predictors, test_size, cv_folds, options=
     }
 
 
+def fit_elastic_net_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
+    model = ElasticNet(
+        alpha=tuned_float(options, "elastic_net", "alpha", 0.1),
+        l1_ratio=tuned_float(options, "elastic_net", "l1_ratio", 0.5),
+        max_iter=10000,
+        random_state=preprocessing_seed(options),
+    )
+    model.fit(scaled_train, split["y_train"])
+    predictions = model.predict(scaled_test)
+    nonzero_count = int(np.sum(np.abs(model.coef_) > 1e-8))
+
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions, parameter_count=nonzero_count + 1)[1:]
+    metrics = append_regression_cv(metrics, "elastic_net", x_encoded, y, cv_folds, options)
+    details = {
+        "Model": "ElasticNet",
+        "Alpha": model.alpha,
+        "L1 ratio": model.l1_ratio,
+        "Non-zero coefficients": nonzero_count,
+        "Feature scaling": scaling_label,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": preprocessing_seed(options),
+    }
+    coefficients = pd.DataFrame({"Term": ["Intercept"] + list(x_encoded.columns), "Coefficient": [model.intercept_] + list(model.coef_)})
+
+    return {
+        "title": "Elastic Net Regression results",
+        "description": f"Target: {target}. Regularized regression blending Ridge and Lasso penalties; test-set metrics are shown.",
+        "target": target,
+        "metrics": metrics,
+        "coefficients_html": display_table(coefficients, index=False, border=0, classes="coefficients"),
+        "importances_html": None,
+        "details_html": details_table(add_preprocessing_details(details, options)),
+        "download_data": {
+            "coefficients": coefficients.to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
+        },
+    }
+
+
+def fit_huber_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    scaled_train, scaled_test, scaling_label = scaled_frames(split, options)
+    model = HuberRegressor(
+        epsilon=tuned_float(options, "huber", "epsilon", 1.35),
+        alpha=tuned_float(options, "huber", "alpha", 0.0001),
+        max_iter=1000,
+    )
+    model.fit(scaled_train, split["y_train"])
+    predictions = model.predict(scaled_test)
+
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions, parameter_count=scaled_train.shape[1] + 1)[1:]
+    metrics = append_regression_cv(metrics, "huber", x_encoded, y, cv_folds, options)
+    details = {
+        "Model": "HuberRegressor",
+        "Epsilon": model.epsilon,
+        "Alpha": model.alpha,
+        "Estimated outliers": int(np.sum(model.outliers_)),
+        "Feature scaling": scaling_label,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": preprocessing_seed(options),
+    }
+    coefficients = pd.DataFrame({"Term": ["Intercept"] + list(x_encoded.columns), "Coefficient": [model.intercept_] + list(model.coef_)})
+
+    return {
+        "title": "Huber Regression results",
+        "description": f"Target: {target}. Robust linear regression that reduces the impact of large residuals; test-set metrics are shown.",
+        "target": target,
+        "metrics": metrics,
+        "coefficients_html": display_table(coefficients, index=False, border=0, classes="coefficients"),
+        "importances_html": None,
+        "details_html": details_table(add_preprocessing_details(details, options)),
+        "download_data": {
+            "coefficients": coefficients.to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
+        },
+    }
+
+
 def fit_random_forest_regression(data, target, predictors, test_size, cv_folds, options=None):
     y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
     split = split_regression_data(y, x_encoded, test_size, options)
@@ -1679,6 +1907,51 @@ def fit_random_forest_regression(data, target, predictors, test_size, cv_folds, 
     }
 
 
+def fit_extra_trees_regression(data, target, predictors, test_size, cv_folds, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    min_samples_leaf = tuned_int(options, "extra_trees", "min_samples_leaf", 1)
+    model = ExtraTreesRegressor(
+        n_estimators=tuned_int(options, "extra_trees", "n_estimators", 200),
+        max_depth=tuned_param(options, "extra_trees", "max_depth", None),
+        min_samples_leaf=min_samples_leaf,
+        random_state=preprocessing_seed(options),
+        n_jobs=-1,
+    )
+    model.fit(split["x_train"], split["y_train"])
+    predictions = model.predict(split["x_test"])
+
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions)[1:]
+    metrics = append_regression_cv(metrics, "extra_trees", x_encoded, y, cv_folds, options)
+    details = {
+        "Model": "ExtraTreesRegressor",
+        "Trees": model.n_estimators,
+        "Maximum depth": model.max_depth if model.max_depth is not None else "None",
+        "Minimum samples per leaf": min_samples_leaf,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": preprocessing_seed(options),
+    }
+    importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
+
+    return {
+        "title": "Extra Trees Regression results",
+        "description": f"Target: {target}. Highly randomized tree ensemble; test-set metrics are shown.",
+        "target": target,
+        "metrics": metrics,
+        "coefficients_html": None,
+        "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
+        "details_html": details_table(add_preprocessing_details(details, options)),
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
+        },
+    }
+
+
 def fit_gradient_boosting_regression(data, target, predictors, test_size, cv_folds, options=None):
     y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
     split = split_regression_data(y, x_encoded, test_size, options)
@@ -1710,6 +1983,57 @@ def fit_gradient_boosting_regression(data, target, predictors, test_size, cv_fol
     return {
         "title": "Gradient Boosting Regression results",
         "description": f"Target: {target}. Sequential boosted-tree regression model; test-set metrics are shown.",
+        "target": target,
+        "metrics": metrics,
+        "coefficients_html": None,
+        "importances_html": importance_table(x_encoded.columns, model.feature_importances_),
+        "details_html": details_table(add_preprocessing_details(details, options)),
+        "download_data": {
+            "variable_importance": importances.to_csv(index=False),
+            "details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False),
+        },
+    }
+
+
+def fit_lightgbm_regression(data, target, predictors, test_size, cv_folds, options=None):
+    if LGBMRegressor is None:
+        raise RuntimeError("LightGBM is not installed. Run pip install lightgbm or install requirements.txt.")
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    model = LGBMRegressor(
+        n_estimators=tuned_int(options, "lightgbm", "n_estimators", 200),
+        learning_rate=tuned_float(options, "lightgbm", "learning_rate", 0.05),
+        num_leaves=tuned_int(options, "lightgbm", "num_leaves", 31),
+        max_depth=tuned_int(options, "lightgbm", "max_depth", -1),
+        min_child_samples=tuned_int(options, "lightgbm", "min_child_samples", 20),
+        random_state=preprocessing_seed(options),
+        n_jobs=-1,
+        verbosity=-1,
+    )
+    model.fit(split["x_train"], split["y_train"])
+    predictions = model.predict(split["x_test"])
+
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions)[1:]
+    metrics = append_regression_cv(metrics, "lightgbm", x_encoded, y, cv_folds, options)
+    details = {
+        "Model": "LGBMRegressor",
+        "Boosting stages": model.n_estimators,
+        "Learning rate": model.learning_rate,
+        "Leaves": model.num_leaves,
+        "Maximum depth": model.max_depth,
+        "Minimum child samples": model.min_child_samples,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": preprocessing_seed(options),
+    }
+    importances = pd.DataFrame({"Predictor": x_encoded.columns, "Importance": model.feature_importances_})
+
+    return {
+        "title": "LightGBM Regression results",
+        "description": f"Target: {target}. Gradient boosted decision-tree regression using LightGBM; test-set metrics are shown.",
         "target": target,
         "metrics": metrics,
         "coefficients_html": None,
@@ -1818,8 +2142,15 @@ CLASSIFICATION_MODEL_FITTERS = {
     "random_forest": fit_random_forest_model,
     "extra_trees": fit_extra_trees_model,
     "gradient_boosting": fit_gradient_boosting_model,
+    "adaboost": fit_adaboost_model,
+    "hist_gradient_boosting": fit_hist_gradient_boosting_model,
     "lightgbm": fit_lightgbm_model,
     "naive_bayes": fit_naive_bayes_model,
+    "lda": fit_lda_model,
+    "qda": fit_qda_model,
+    "gaussian_process": fit_gaussian_process_model,
+    "mlp": fit_mlp_model,
+    "passive_aggressive": fit_passive_aggressive_model,
     "elastic_net_logistic": fit_elastic_net_logistic_regression,
     "svm": fit_svm_model,
     "knn": fit_knn_model,
@@ -1829,8 +2160,12 @@ REGRESSION_MODEL_FITTERS = {
     "linear": fit_linear_regression,
     "ridge": fit_ridge_regression,
     "lasso": fit_lasso_regression,
+    "elastic_net": fit_elastic_net_regression,
+    "huber": fit_huber_regression,
     "random_forest": fit_random_forest_regression,
+    "extra_trees": fit_extra_trees_regression,
     "gradient_boosting": fit_gradient_boosting_regression,
+    "lightgbm": fit_lightgbm_regression,
     "svr": fit_svr_regression,
     "knn": fit_knn_regression,
 }
@@ -1915,7 +2250,7 @@ def make_model_tab(config):
             "selected_missing_values": "drop",
             "selected_categorical_encoding": "one_hot_drop_first",
             "selected_scaling": "on",
-            "selected_split_seed": 42,
+            "selected_split_seed": random_split_seed(),
             "selected_outlier_handling": "none",
             "selected_calibration": "off",
             "selected_tuning_mode": "off",
@@ -2030,8 +2365,15 @@ CLASSIFICATION_MODEL_LABELS = {
     "random_forest": "Random Forest",
     "extra_trees": "Extra Trees",
     "gradient_boosting": "Gradient Boosting",
+    "adaboost": "AdaBoost",
+    "hist_gradient_boosting": "Hist Gradient Boosting",
     "lightgbm": "LightGBM",
     "naive_bayes": "Naive Bayes",
+    "lda": "Linear Discriminant Analysis",
+    "qda": "Quadratic Discriminant Analysis",
+    "gaussian_process": "Gaussian Process",
+    "mlp": "MLP Neural Network",
+    "passive_aggressive": "Passive Aggressive",
     "elastic_net_logistic": "Elastic Net Logistic Regression",
     "svm": "Support Vector Machine",
     "knn": "kNN",
@@ -2079,6 +2421,16 @@ def classification_tuning_grid(model_name, estimator):
     if model_name == "gradient_boosting":
         prefix = estimator_step_name(estimator, GradientBoostingClassifier)
         return {f"{prefix}n_estimators": [50, 100], f"{prefix}learning_rate": [0.05, 0.1, 0.2], f"{prefix}max_depth": [2, 3]}
+    if model_name == "adaboost":
+        prefix = estimator_step_name(estimator, AdaBoostClassifier)
+        return {f"{prefix}n_estimators": [50, 100, 200], f"{prefix}learning_rate": [0.25, 0.5, 1.0]}
+    if model_name == "hist_gradient_boosting":
+        prefix = estimator_step_name(estimator, HistGradientBoostingClassifier)
+        return {
+            f"{prefix}max_iter": [50, 100, 200],
+            f"{prefix}learning_rate": [0.05, 0.1],
+            f"{prefix}max_leaf_nodes": [15, 31],
+        }
     if model_name == "lightgbm":
         if LGBMClassifier is None:
             return {}
@@ -2092,6 +2444,25 @@ def classification_tuning_grid(model_name, estimator):
     if model_name == "naive_bayes":
         prefix = estimator_step_name(estimator, GaussianNB)
         return {f"{prefix}var_smoothing": [1e-9, 1e-8, 1e-7]}
+    if model_name == "lda":
+        prefix = estimator_step_name(estimator, LinearDiscriminantAnalysis)
+        return {f"{prefix}shrinkage": ["auto", None, 0.25, 0.5]}
+    if model_name == "qda":
+        prefix = estimator_step_name(estimator, QuadraticDiscriminantAnalysis)
+        return {f"{prefix}reg_param": [0.0, 0.1, 0.25, 0.5]}
+    if model_name == "gaussian_process":
+        prefix = estimator_step_name(estimator, GaussianProcessClassifier)
+        return {f"{prefix}max_iter_predict": [50, 100, 200]}
+    if model_name == "mlp":
+        prefix = estimator_step_name(estimator, MLPClassifier)
+        return {
+            f"{prefix}hidden_layer_sizes": [(50,), (100,), (50, 25)],
+            f"{prefix}alpha": [0.0001, 0.001],
+            f"{prefix}learning_rate_init": [0.001, 0.01],
+        }
+    if model_name == "passive_aggressive":
+        prefix = estimator_step_name(estimator, SGDClassifier)
+        return {f"{prefix}eta0": [0.1, 1.0, 10.0], f"{prefix}loss": ["hinge", "squared_hinge"]}
     if model_name == "svm":
         prefix = estimator_step_name(estimator, SVC)
         return {f"{prefix}C": [0.5, 1.0, 2.0], f"{prefix}gamma": ["scale", "auto"]}
@@ -2110,10 +2481,27 @@ def regression_tuning_grid(model_name, estimator):
     if model_name == "lasso":
         prefix = estimator_step_name(estimator, Lasso)
         return {f"{prefix}alpha": [0.01, 0.1, 1.0]}
+    if model_name == "elastic_net":
+        prefix = estimator_step_name(estimator, ElasticNet)
+        return {f"{prefix}alpha": [0.01, 0.1, 1.0], f"{prefix}l1_ratio": [0.15, 0.5, 0.85]}
+    if model_name == "huber":
+        prefix = estimator_step_name(estimator, HuberRegressor)
+        return {f"{prefix}epsilon": [1.1, 1.35, 1.75], f"{prefix}alpha": [0.0001, 0.001, 0.01]}
     if model_name == "random_forest":
+        return {"n_estimators": [100, 200], "max_depth": [None, 6, 10], "min_samples_leaf": [1, 5]}
+    if model_name == "extra_trees":
         return {"n_estimators": [100, 200], "max_depth": [None, 6, 10], "min_samples_leaf": [1, 5]}
     if model_name == "gradient_boosting":
         return {"n_estimators": [50, 100], "learning_rate": [0.05, 0.1, 0.2], "max_depth": [2, 3]}
+    if model_name == "lightgbm":
+        if LGBMRegressor is None:
+            return {}
+        return {
+            "n_estimators": [100, 200],
+            "learning_rate": [0.03, 0.05, 0.1],
+            "num_leaves": [15, 31, 63],
+            "min_child_samples": [10, 20, 40],
+        }
     if model_name == "svr":
         prefix = estimator_step_name(estimator, SVR)
         return {f"{prefix}C": [0.5, 1.0, 2.0], f"{prefix}epsilon": [0.05, 0.1, 0.2], f"{prefix}gamma": ["scale", "auto"]}
@@ -3505,8 +3893,12 @@ REGRESSION_MODEL_LABELS = {
     "linear": "Linear Regression",
     "ridge": "Ridge Regression",
     "lasso": "Lasso Regression",
+    "elastic_net": "Elastic Net Regression",
+    "huber": "Huber Regression",
     "random_forest": "Random Forest Regression",
+    "extra_trees": "Extra Trees Regression",
     "gradient_boosting": "Gradient Boosting Regression",
+    "lightgbm": "LightGBM Regression",
     "svr": "Support Vector Regression",
     "knn": "kNN Regression",
 }
@@ -3783,6 +4175,8 @@ def index():
         has_subscription=has_subscription,
         mollie_configured=mollie_configured(),
         subscription_price=f"{SUBSCRIPTION_CURRENCY} {SUBSCRIPTION_AMOUNT} / {SUBSCRIPTION_INTERVAL}",
+        subscription_date=user["subscription_updated_at"] if user and user["subscription_updated_at"] else "-",
+        subscription_fee=f"{SUBSCRIPTION_CURRENCY} {SUBSCRIPTION_AMOUNT} per month",
         data_error=data_error,
         table_html=table_html,
         filename=filename,

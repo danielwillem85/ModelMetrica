@@ -1,7 +1,9 @@
 const tabs = document.querySelectorAll(".tab");
 const panels = document.querySelectorAll(".tab-panel");
 const processingOverlay = document.getElementById("processing-overlay");
+const modelSelectionOverlay = document.getElementById("model-selection-overlay");
 const subscriptionOverlay = document.getElementById("subscription-overlay");
+const accountSubscriptionOverlay = document.getElementById("account-subscription-overlay");
 const hasSubscription = document.body.dataset.hasSubscription === "true";
 const signupToggle = document.querySelector("[data-show-signup]");
 const signupForm = document.querySelector("[data-signup-form]");
@@ -14,6 +16,18 @@ function showProcessingOverlay() {
   }
 }
 
+function showModelSelectionOverlay() {
+  if (modelSelectionOverlay) {
+    modelSelectionOverlay.classList.add("active");
+  }
+}
+
+function hideModelSelectionOverlay() {
+  if (modelSelectionOverlay) {
+    modelSelectionOverlay.classList.remove("active");
+  }
+}
+
 function showSubscriptionOverlay() {
   if (subscriptionOverlay) {
     subscriptionOverlay.classList.add("active");
@@ -23,6 +37,18 @@ function showSubscriptionOverlay() {
 function hideSubscriptionOverlay() {
   if (subscriptionOverlay) {
     subscriptionOverlay.classList.remove("active");
+  }
+}
+
+function showAccountSubscriptionOverlay() {
+  if (accountSubscriptionOverlay) {
+    accountSubscriptionOverlay.classList.add("active");
+  }
+}
+
+function hideAccountSubscriptionOverlay() {
+  if (accountSubscriptionOverlay) {
+    accountSubscriptionOverlay.classList.remove("active");
   }
 }
 
@@ -78,6 +104,11 @@ document.querySelectorAll(".model-comparison tbody tr[data-model-name]").forEach
 
 document.querySelectorAll("form[data-run-form]").forEach((form) => {
   form.addEventListener("submit", (event) => {
+    if (!formHasSelectedModel(form)) {
+      event.preventDefault();
+      showModelSelectionOverlay();
+      return;
+    }
     if (!form.checkValidity()) {
       return;
     }
@@ -90,14 +121,54 @@ document.querySelectorAll("form[data-run-form]").forEach((form) => {
   });
 });
 
+function formHasSelectedModel(form) {
+  const modelCheckboxes = form.querySelectorAll(".model-choice-grid input[type='checkbox']");
+  if (modelCheckboxes.length) {
+    return Array.from(modelCheckboxes).some((checkbox) => checkbox.checked);
+  }
+  const modelSelect = form.querySelector("select[name$='_model']");
+  if (!modelSelect) {
+    return true;
+  }
+  return Array.from(modelSelect.selectedOptions).some((option) => option.value);
+}
+
+document.querySelectorAll("[data-close-model-selection]").forEach((button) => {
+  button.addEventListener("click", hideModelSelectionOverlay);
+});
+
 document.querySelectorAll("[data-close-subscription]").forEach((button) => {
   button.addEventListener("click", hideSubscriptionOverlay);
+});
+
+document.querySelectorAll("[data-open-account-subscription]").forEach((button) => {
+  button.addEventListener("click", showAccountSubscriptionOverlay);
+});
+
+document.querySelectorAll("[data-close-account-subscription]").forEach((button) => {
+  button.addEventListener("click", hideAccountSubscriptionOverlay);
 });
 
 if (subscriptionOverlay) {
   subscriptionOverlay.addEventListener("click", (event) => {
     if (event.target === subscriptionOverlay) {
       hideSubscriptionOverlay();
+    }
+  });
+}
+
+if (modelSelectionOverlay) {
+  modelSelectionOverlay.addEventListener("click", (event) => {
+    if (event.target === modelSelectionOverlay) {
+      hideModelSelectionOverlay();
+    }
+  });
+}
+
+if (accountSubscriptionOverlay) {
+  accountSubscriptionOverlay.addEventListener("click", (event) => {
+    if (event.target === accountSubscriptionOverlay) {
+      hideAccountSubscriptionOverlay();
     }
   });
 }

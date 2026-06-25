@@ -8,7 +8,28 @@
               <input type="hidden" name="form_name" value="{{ tab.form_name }}">
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div class="form-field model-type-field">
-                <label for="{{ tab.model_field }}">Model type (multi select using CTRL button)</label>
+                <label id="{{ tab.model_field }}_label" for="{{ tab.model_field }}">Model type</label>
+                {% if tab.allow_model_comparison %}
+                <div id="{{ tab.model_field }}" class="model-choice-grid" role="group" aria-labelledby="{{ tab.model_field }}_label">
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="logistic" {{ 'checked' if 'logistic' in tab.selected_models else '' }}> Logistic regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="tree" {{ 'checked' if 'tree' in tab.selected_models else '' }}> Tree model</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="random_forest" {{ 'checked' if 'random_forest' in tab.selected_models else '' }}> Random Forest</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="extra_trees" {{ 'checked' if 'extra_trees' in tab.selected_models else '' }}> Extra Trees</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="gradient_boosting" {{ 'checked' if 'gradient_boosting' in tab.selected_models else '' }}> Gradient Boosting</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="adaboost" {{ 'checked' if 'adaboost' in tab.selected_models else '' }}> AdaBoost</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="hist_gradient_boosting" {{ 'checked' if 'hist_gradient_boosting' in tab.selected_models else '' }}> Hist Gradient Boosting</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="lightgbm" {{ 'checked' if 'lightgbm' in tab.selected_models else '' }}> LightGBM</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="naive_bayes" {{ 'checked' if 'naive_bayes' in tab.selected_models else '' }}> Naive Bayes</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="lda" {{ 'checked' if 'lda' in tab.selected_models else '' }}> Linear Discriminant Analysis</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="qda" {{ 'checked' if 'qda' in tab.selected_models else '' }}> Quadratic Discriminant Analysis</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="gaussian_process" {{ 'checked' if 'gaussian_process' in tab.selected_models else '' }}> Gaussian Process</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="mlp" {{ 'checked' if 'mlp' in tab.selected_models else '' }}> MLP Neural Network</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="passive_aggressive" {{ 'checked' if 'passive_aggressive' in tab.selected_models else '' }}> Passive Aggressive</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="elastic_net_logistic" {{ 'checked' if 'elastic_net_logistic' in tab.selected_models else '' }}> Elastic Net Logistic Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="svm" {{ 'checked' if 'svm' in tab.selected_models else '' }}> Support Vector Machine</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="knn" {{ 'checked' if 'knn' in tab.selected_models else '' }}> kNN</label>
+                </div>
+                {% else %}
                 <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="10"{% endif %} required>
                   <option value="logistic" {{ 'selected' if 'logistic' in tab.selected_models else '' }}>Logistic regression</option>
                   <option value="tree" {{ 'selected' if 'tree' in tab.selected_models else '' }}>Tree model</option>
@@ -25,6 +46,7 @@
                   <option value="svm" {{ 'selected' if 'svm' in tab.selected_models else '' }}>Support Vector Machine</option>
                   <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN</option>
                 </select>
+                {% endif %}
               </div>
               {% if tab.allow_model_comparison %}
               <div class="form-field detail-model-field">
@@ -36,8 +58,15 @@
                   <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest</option>
                   <option value="extra_trees" {{ 'selected' if tab.selected_detail_model == 'extra_trees' else '' }}>Extra Trees</option>
                   <option value="gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'gradient_boosting' else '' }}>Gradient Boosting</option>
+                  <option value="adaboost" {{ 'selected' if tab.selected_detail_model == 'adaboost' else '' }}>AdaBoost</option>
+                  <option value="hist_gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'hist_gradient_boosting' else '' }}>Hist Gradient Boosting</option>
                   <option value="lightgbm" {{ 'selected' if tab.selected_detail_model == 'lightgbm' else '' }}>LightGBM</option>
                   <option value="naive_bayes" {{ 'selected' if tab.selected_detail_model == 'naive_bayes' else '' }}>Naive Bayes</option>
+                  <option value="lda" {{ 'selected' if tab.selected_detail_model == 'lda' else '' }}>Linear Discriminant Analysis</option>
+                  <option value="qda" {{ 'selected' if tab.selected_detail_model == 'qda' else '' }}>Quadratic Discriminant Analysis</option>
+                  <option value="gaussian_process" {{ 'selected' if tab.selected_detail_model == 'gaussian_process' else '' }}>Gaussian Process</option>
+                  <option value="mlp" {{ 'selected' if tab.selected_detail_model == 'mlp' else '' }}>MLP Neural Network</option>
+                  <option value="passive_aggressive" {{ 'selected' if tab.selected_detail_model == 'passive_aggressive' else '' }}>Passive Aggressive</option>
                   <option value="elastic_net_logistic" {{ 'selected' if tab.selected_detail_model == 'elastic_net_logistic' else '' }}>Elastic Net Logistic Regression</option>
                   <option value="svm" {{ 'selected' if tab.selected_detail_model == 'svm' else '' }}>Support Vector Machine</option>
                   <option value="knn" {{ 'selected' if tab.selected_detail_model == 'knn' else '' }}>kNN</option>
@@ -53,7 +82,7 @@
                 </select>
               </div>
               <div class="form-field predictors-field">
-                <label for="{{ tab.predictors_field }}">Predictor columns</label>
+                <label for="{{ tab.predictors_field }}">Predictor columns <span class="label-note">(select multiple using CTRL button)</span></label>
                 <select id="{{ tab.predictors_field }}" name="{{ tab.predictors_field }}" multiple required>
                   {% for column in columns %}
                     <option value="{{ column }}" {{ 'selected' if column in tab.selected_predictors else '' }}>{{ column }}</option>
@@ -67,7 +96,16 @@
                   <option value="0.2" {{ 'selected' if tab.selected_test_size == 0.2 else '' }}>20%</option>
                   <option value="0.25" {{ 'selected' if tab.selected_test_size == 0.25 else '' }}>25%</option>
                   <option value="0.3" {{ 'selected' if tab.selected_test_size == 0.3 else '' }}>30%</option>
+                  <option value="0.35" {{ 'selected' if tab.selected_test_size == 0.35 else '' }}>35%</option>
                   <option value="0.4" {{ 'selected' if tab.selected_test_size == 0.4 else '' }}>40%</option>
+                  <option value="0.45" {{ 'selected' if tab.selected_test_size == 0.45 else '' }}>45%</option>
+                  <option value="0.5" {{ 'selected' if tab.selected_test_size == 0.5 else '' }}>50%</option>
+                  <option value="0.55" {{ 'selected' if tab.selected_test_size == 0.55 else '' }}>55%</option>
+                  <option value="0.6" {{ 'selected' if tab.selected_test_size == 0.6 else '' }}>60%</option>
+                  <option value="0.65" {{ 'selected' if tab.selected_test_size == 0.65 else '' }}>65%</option>
+                  <option value="0.7" {{ 'selected' if tab.selected_test_size == 0.7 else '' }}>70%</option>
+                  <option value="0.75" {{ 'selected' if tab.selected_test_size == 0.75 else '' }}>75%</option>
+                  <option value="0.8" {{ 'selected' if tab.selected_test_size == 0.8 else '' }}>80%</option>
                 </select>
               </div>
               <details class="options-panel form-field options-field">
@@ -369,13 +407,23 @@
               <input type="hidden" name="form_name" value="{{ tab.form_name }}">
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div class="form-field model-type-field">
-                <label for="{{ tab.model_field }}">Model type (multi select using CTRL button)</label>
-                <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="8"{% endif %} required>
+                <label for="{{ tab.model_field }}">Model type</label>
+                <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="11"{% endif %} required>
                   <option value="linear" {{ 'selected' if 'linear' in tab.selected_models else '' }}>Linear Regression</option>
                   <option value="ridge" {{ 'selected' if 'ridge' in tab.selected_models else '' }}>Ridge Regression</option>
                   <option value="lasso" {{ 'selected' if 'lasso' in tab.selected_models else '' }}>Lasso Regression</option>
+                  {% if tab.allow_model_comparison %}
+                  <option value="elastic_net" {{ 'selected' if 'elastic_net' in tab.selected_models else '' }}>Elastic Net Regression</option>
+                  <option value="huber" {{ 'selected' if 'huber' in tab.selected_models else '' }}>Huber Regression</option>
+                  {% endif %}
                   <option value="random_forest" {{ 'selected' if 'random_forest' in tab.selected_models else '' }}>Random Forest Regression</option>
+                  {% if tab.allow_model_comparison %}
+                  <option value="extra_trees" {{ 'selected' if 'extra_trees' in tab.selected_models else '' }}>Extra Trees Regression</option>
+                  {% endif %}
                   <option value="gradient_boosting" {{ 'selected' if 'gradient_boosting' in tab.selected_models else '' }}>Gradient Boosting Regression</option>
+                  {% if tab.allow_model_comparison %}
+                  <option value="lightgbm" {{ 'selected' if 'lightgbm' in tab.selected_models else '' }}>LightGBM Regression</option>
+                  {% endif %}
                   <option value="svr" {{ 'selected' if 'svr' in tab.selected_models else '' }}>Support Vector Regression</option>
                   <option value="knn" {{ 'selected' if 'knn' in tab.selected_models else '' }}>kNN Regression</option>
                 </select>
@@ -388,8 +436,12 @@
                   <option value="linear" {{ 'selected' if tab.selected_detail_model == 'linear' else '' }}>Linear Regression</option>
                   <option value="ridge" {{ 'selected' if tab.selected_detail_model == 'ridge' else '' }}>Ridge Regression</option>
                   <option value="lasso" {{ 'selected' if tab.selected_detail_model == 'lasso' else '' }}>Lasso Regression</option>
+                  <option value="elastic_net" {{ 'selected' if tab.selected_detail_model == 'elastic_net' else '' }}>Elastic Net Regression</option>
+                  <option value="huber" {{ 'selected' if tab.selected_detail_model == 'huber' else '' }}>Huber Regression</option>
                   <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest Regression</option>
+                  <option value="extra_trees" {{ 'selected' if tab.selected_detail_model == 'extra_trees' else '' }}>Extra Trees Regression</option>
                   <option value="gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'gradient_boosting' else '' }}>Gradient Boosting Regression</option>
+                  <option value="lightgbm" {{ 'selected' if tab.selected_detail_model == 'lightgbm' else '' }}>LightGBM Regression</option>
                   <option value="svr" {{ 'selected' if tab.selected_detail_model == 'svr' else '' }}>Support Vector Regression</option>
                   <option value="knn" {{ 'selected' if tab.selected_detail_model == 'knn' else '' }}>kNN Regression</option>
                 </select>
@@ -404,7 +456,7 @@
                 </select>
               </div>
               <div class="form-field predictors-field">
-                <label for="{{ tab.predictors_field }}">Predictor columns</label>
+                <label for="{{ tab.predictors_field }}">Predictor columns <span class="label-note">(select multiple using CTRL button)</span></label>
                 <select id="{{ tab.predictors_field }}" name="{{ tab.predictors_field }}" multiple required>
                   {% for column in columns %}
                     <option value="{{ column }}" {{ 'selected' if column in tab.selected_predictors else '' }}>{{ column }}</option>
@@ -418,7 +470,16 @@
                   <option value="0.2" {{ 'selected' if tab.selected_test_size == 0.2 else '' }}>20%</option>
                   <option value="0.25" {{ 'selected' if tab.selected_test_size == 0.25 else '' }}>25%</option>
                   <option value="0.3" {{ 'selected' if tab.selected_test_size == 0.3 else '' }}>30%</option>
+                  <option value="0.35" {{ 'selected' if tab.selected_test_size == 0.35 else '' }}>35%</option>
                   <option value="0.4" {{ 'selected' if tab.selected_test_size == 0.4 else '' }}>40%</option>
+                  <option value="0.45" {{ 'selected' if tab.selected_test_size == 0.45 else '' }}>45%</option>
+                  <option value="0.5" {{ 'selected' if tab.selected_test_size == 0.5 else '' }}>50%</option>
+                  <option value="0.55" {{ 'selected' if tab.selected_test_size == 0.55 else '' }}>55%</option>
+                  <option value="0.6" {{ 'selected' if tab.selected_test_size == 0.6 else '' }}>60%</option>
+                  <option value="0.65" {{ 'selected' if tab.selected_test_size == 0.65 else '' }}>65%</option>
+                  <option value="0.7" {{ 'selected' if tab.selected_test_size == 0.7 else '' }}>70%</option>
+                  <option value="0.75" {{ 'selected' if tab.selected_test_size == 0.75 else '' }}>75%</option>
+                  <option value="0.8" {{ 'selected' if tab.selected_test_size == 0.8 else '' }}>80%</option>
                 </select>
               </div>
               <details class="options-panel form-field options-field">
@@ -711,9 +772,7 @@
         <div class="subscription-actions">
           <span class="subscription-status {{ 'active' if has_subscription else '' }}">{{ 'Pro active' if has_subscription else 'Free plan' }}</span>
           {% if has_subscription %}
-            <form method="post" action="{{ url_for('cancel_subscription') }}" onsubmit="return confirm('Cancel your Pro subscription? Pro access will be removed after cancellation.');">
-              <button type="submit" class="cancel-subscription-button">Cancel subscription</button>
-            </form>
+            <button type="button" class="subscription-options-button" data-open-account-subscription>Options</button>
           {% endif %}
         </div>
       </div>
@@ -825,6 +884,14 @@
         <p id="processing-description">Running the model. This may take a moment.</p>
       </div>
     </div>
+    <div id="model-selection-overlay" class="model-selection-overlay" role="alertdialog" aria-modal="true" aria-labelledby="model-selection-title" aria-describedby="model-selection-description">
+      <div class="model-selection-dialog">
+        <button type="button" class="modal-close" data-close-model-selection aria-label="Close model selection warning">x</button>
+        <h2 id="model-selection-title">No model selected</h2>
+        <p id="model-selection-description">Select at least one model type before running the analysis.</p>
+        <button type="button" data-close-model-selection>Select a model</button>
+      </div>
+    </div>
     <div id="subscription-overlay" class="subscription-overlay" role="dialog" aria-modal="true" aria-labelledby="subscription-title" aria-describedby="subscription-description">
       <div class="subscription-dialog">
         <button type="button" class="modal-close" data-close-subscription aria-label="Close subscription popup">x</button>
@@ -855,6 +922,27 @@
         {% endif %}
       </div>
     </div>
+    {% if is_authenticated and has_subscription %}
+    <div id="account-subscription-overlay" class="account-subscription-overlay" role="dialog" aria-modal="true" aria-labelledby="account-subscription-title">
+      <div class="account-subscription-dialog">
+        <button type="button" class="modal-close" data-close-account-subscription aria-label="Close subscription options">x</button>
+        <h2 id="account-subscription-title">Subscription options</h2>
+        <dl class="subscription-details-list">
+          <div>
+            <dt>Subscription date</dt>
+            <dd>{{ subscription_date }}</dd>
+          </div>
+          <div>
+            <dt>Monthly recurring fee</dt>
+            <dd>{{ subscription_fee }}</dd>
+          </div>
+        </dl>
+        <form method="post" action="{{ url_for('cancel_subscription') }}" onsubmit="return confirm('Cancel your Pro subscription? Pro access will be removed after cancellation.');">
+          <button type="submit" class="cancel-subscription-button"><span>Cancel</span><span>subscription</span></button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
     <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   </body>
 </html>

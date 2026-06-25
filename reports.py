@@ -57,7 +57,7 @@ class ReportRenderer:
             {"Field": "Missing values", "Value": preprocessing.get("Missing values", "-")},
             {"Field": "Categorical encoding", "Value": preprocessing.get("Categorical encoding", "-")},
             {"Field": "Feature scaling", "Value": preprocessing.get("Feature scaling", "-")},
-            {"Field": "Split seed", "Value": snapshot.get("selected_split_seed", 42)},
+            {"Field": "Split seed", "Value": snapshot.get("selected_split_seed", "-")},
             {"Field": "Outlier handling", "Value": preprocessing.get("Outlier handling", "-")},
             {"Field": "Probability calibration", "Value": {"off": "Off", "sigmoid": "Sigmoid", "isotonic": "Isotonic"}.get(snapshot.get("selected_calibration", "off"), "Off") if tab_name == "pro_classification" else "-"},
             {"Field": "Hyperparameter tuning", "Value": {"off": "Off", "grid": "Grid search", "random": "Random search"}.get(snapshot.get("selected_tuning_mode", "off"), "Off")},
