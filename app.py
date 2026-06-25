@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 from secrets import randbelow
 from threading import Lock
 import time
@@ -444,6 +445,22 @@ def apply_outlier_handling(model_data, target, predictors, task, options):
     return model_data
 
 
+def safe_feature_columns(columns):
+    safe_columns = []
+    seen = set()
+    for column in columns:
+        base = re.sub(r"[\[\]<>]", "_", str(column)).strip()
+        base = re.sub(r"\s+", " ", base) or "feature"
+        candidate = base
+        suffix = 2
+        while candidate in seen:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        safe_columns.append(candidate)
+        seen.add(candidate)
+    return safe_columns
+
+
 def encode_predictors(model_data, predictors, options):
     x_raw = model_data[predictors]
     if categorical_encoding_mode(options) == "ordinal":
@@ -453,10 +470,14 @@ def encode_predictors(model_data, predictors, options):
                 encoded[column] = pd.to_numeric(x_raw[column], errors="coerce")
             else:
                 encoded[column] = pd.Categorical(x_raw[column]).codes.astype(float)
-        return encoded.astype(float)
+        encoded = encoded.astype(float)
+        encoded.columns = safe_feature_columns(encoded.columns)
+        return encoded
 
     drop_first = categorical_encoding_mode(options) == "one_hot_drop_first"
-    return pd.get_dummies(x_raw, drop_first=drop_first, dtype=float)
+    encoded = pd.get_dummies(x_raw, drop_first=drop_first, dtype=float)
+    encoded.columns = safe_feature_columns(encoded.columns)
+    return encoded
 
 
 def scaled_frames(split, options):
