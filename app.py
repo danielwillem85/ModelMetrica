@@ -3101,6 +3101,18 @@ def comparison_row_status(model_name, best_model_name, detail_model_name):
         labels.append("Detailed")
     return " / ".join(labels) if labels else "Fit"
 
+
+def fit_failure_summary(rows):
+    failures = [
+        f"{row.get('Model', 'Model')}: {row.get('Status')}"
+        for row in rows
+        if row.get("Status") and row.get("Status") != "Fit"
+    ]
+    if not failures:
+        return "No selected model could be fit."
+    return "No selected model could be fit. " + " | ".join(failures[:3])
+
+
 def handle_classification_comparison_submission(tab, dataset):
     options = preprocessing_options(tab)
     successful_outputs = []
@@ -3232,7 +3244,7 @@ def handle_classification_comparison_submission(tab, dataset):
         tab["recommendation"] = build_classification_recommendation(tab, rows, best_model_name, detail_model_name, detail_output, dataset["data"])
         tab["output"] = register_downloads(tab["form_name"], detail_output)
     else:
-        tab["error"] = "No selected model could be fit."
+        tab["error"] = fit_failure_summary(rows)
         tab["detail_metric_comparison_html"] = None
         tab["recommendation"] = None
 
@@ -3631,7 +3643,7 @@ def handle_regression_comparison_submission(tab, dataset):
         tab["recommendation"] = build_regression_recommendation(tab, rows, best_model_name, detail_model_name, detail_output, dataset["data"])
         tab["output"] = register_downloads(tab["form_name"], detail_output)
     else:
-        tab["error"] = "No selected model could be fit."
+        tab["error"] = fit_failure_summary(rows)
         tab["detail_metric_comparison_html"] = None
         tab["recommendation"] = None
 
