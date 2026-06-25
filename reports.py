@@ -434,3 +434,14 @@ class ReportRenderer:
 
         buffer.seek(0)
         return buffer.getvalue()
+
+    def model_comparison_pdf_bytes(self, csv_data):
+        frame = self.csv_report_frame(csv_data)
+        if frame is None or frame.empty:
+            return None
+
+        buffer = BytesIO()
+        with PdfPages(buffer) as pdf:
+            self.add_pdf_table_pages(pdf, "Model Comparison", frame, rows_per_page=18)
+        buffer.seek(0)
+        return buffer.getvalue()

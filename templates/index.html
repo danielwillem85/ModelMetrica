@@ -216,7 +216,7 @@
         </div>
 
         {% if tab.run_history %}
-          <div class="panel">
+          <div id="{{ tab.id }}_recent_runs" class="panel">
             <h2>Recent Pro runs</h2>
             <div class="table-wrap">
               <table>
@@ -242,7 +242,11 @@
                         {% if run.is_selected %}
                           <span class="loaded-run">Loaded</span>
                         {% else %}
-                          <form class="inline-form" method="post" action="{{ url_for('load_pro_run', tab_name=tab.form_name, run_id=run.run_id) }}">
+                          <form class="inline-form" method="post" action="/">
+                            <input type="hidden" name="form_name" value="load_pro_run">
+                            <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
+                            <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
+                            <input type="hidden" name="run_id" value="{{ run.run_id }}">
                             <button class="small-action" type="submit">Load</button>
                           </form>
                         {% endif %}
@@ -261,6 +265,9 @@
             {% if tab.comparison_download %}
               <div class="download-links">
                 <a href="{{ tab.comparison_download.href }}">{{ tab.comparison_download.label }}</a>
+                {% if tab.comparison_pdf_download %}
+                  <a href="{{ tab.comparison_pdf_download.href }}">{{ tab.comparison_pdf_download.label }}</a>
+                {% endif %}
               </div>
             {% endif %}
             <div class="table-wrap">
@@ -608,7 +615,7 @@
         </div>
 
         {% if tab.run_history %}
-          <div class="panel">
+          <div id="{{ tab.id }}_recent_runs" class="panel">
             <h2>Recent Pro runs</h2>
             <div class="table-wrap">
               <table>
@@ -634,7 +641,11 @@
                         {% if run.is_selected %}
                           <span class="loaded-run">Loaded</span>
                         {% else %}
-                          <form class="inline-form" method="post" action="{{ url_for('load_pro_run', tab_name=tab.form_name, run_id=run.run_id) }}">
+                          <form class="inline-form" method="post" action="/">
+                            <input type="hidden" name="form_name" value="load_pro_run">
+                            <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
+                            <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
+                            <input type="hidden" name="run_id" value="{{ run.run_id }}">
                             <button class="small-action" type="submit">Load</button>
                           </form>
                         {% endif %}
@@ -653,6 +664,9 @@
             {% if tab.comparison_download %}
               <div class="download-links">
                 <a href="{{ tab.comparison_download.href }}">{{ tab.comparison_download.label }}</a>
+                {% if tab.comparison_pdf_download %}
+                  <a href="{{ tab.comparison_pdf_download.href }}">{{ tab.comparison_pdf_download.label }}</a>
+                {% endif %}
               </div>
             {% endif %}
             <div class="table-wrap">

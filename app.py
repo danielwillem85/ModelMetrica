@@ -2598,6 +2598,7 @@ def make_model_tab(config):
             "detail_metric_comparison_html": None,
             "recommendation": None,
             "comparison_download": None,
+            "comparison_pdf_download": None,
             "report_download": None,
             "report_pdf_download": None,
             "run_history": [],
@@ -3441,6 +3442,13 @@ def register_comparison_download(tab, comparison):
     }
 
 
+def model_comparison_pdf_download(tab):
+    return {
+        "href": url_for("download_result", result_type=tab["form_name"], artifact="model_comparison_pdf"),
+        "label": "Download model comparison PDF",
+    }
+
+
 def status_badges(row):
     badges = []
     if row.get("_is_best"):
@@ -3998,6 +4006,7 @@ def handle_classification_comparison_submission(tab, dataset):
 
     tab["comparison_html"], comparison = comparison_html(rows, ["Model", "Default accuracy", "Default CV accuracy", "CV accuracy SD", "CV accuracy min", "CV accuracy max", "Tuned accuracy", "Tuned CV accuracy", "Precision", "Recall", "F1", "Best params", "Status"])
     tab["comparison_download"] = register_comparison_download(tab, comparison)
+    tab["comparison_pdf_download"] = model_comparison_pdf_download(tab)
 
 PRO_TAB_NAMES = {"pro_classification", "pro_regression"}
 
@@ -4194,6 +4203,7 @@ def save_pro_run(tab):
         "detail_metric_comparison_html": tab.get("detail_metric_comparison_html"),
         "recommendation": deepcopy(tab.get("recommendation")),
         "comparison_download": deepcopy(tab.get("comparison_download")),
+        "comparison_pdf_download": deepcopy(tab.get("comparison_pdf_download")),
         "output": deepcopy(tab.get("output")),
         "download_artifacts": tab_download_artifacts(tab),
         "history_entry": run_history_entry(tab),
@@ -4241,6 +4251,7 @@ def restore_pro_run(tab, snapshot):
         "detail_metric_comparison_html",
         "recommendation",
         "comparison_download",
+        "comparison_pdf_download",
         "output",
     ]:
         tab[key] = deepcopy(snapshot.get(key))
@@ -4249,6 +4260,8 @@ def restore_pro_run(tab, snapshot):
     if tab.get("selected_calibration") is None:
         tab["selected_calibration"] = "off"
     restore_download_artifacts(tab, snapshot)
+    if (snapshot.get("download_artifacts") or {}).get("model_comparison"):
+        tab["comparison_pdf_download"] = model_comparison_pdf_download(tab)
     tab["report_download"] = pro_report_download(tab["form_name"])
     tab["report_pdf_download"] = pro_report_pdf_download(tab["form_name"])
     tab["selected_run_id"] = snapshot.get("run_id")
@@ -4460,6 +4473,7 @@ def handle_regression_comparison_submission(tab, dataset):
         ["Model", "Test R squared", "Default RMSE", "Default CV RMSE", "CV RMSE SD", "CV RMSE min", "CV RMSE max", "Tuned RMSE", "Tuned CV RMSE", "Test MAE", "CV R squared", "Best params", "Status"],
     )
     tab["comparison_download"] = register_comparison_download(tab, comparison)
+    tab["comparison_pdf_download"] = model_comparison_pdf_download(tab)
 
 def handle_regression_submission(tab, dataset):
     populate_tab_from_request(tab)
@@ -4525,6 +4539,19 @@ def index():
     authenticated = is_user_authenticated()
     user = current_user() if authenticated else None
     has_subscription = user_has_subscription(user)
+
+    if authenticated and request.method == "POST" and form_name == "load_pro_run":
+        tab_name = request.form.get("tab_name", "")
+        try:
+            run_id = int(request.form.get("run_id", ""))
+        except (TypeError, ValueError):
+            return Response("Invalid Pro run.", status=400, mimetype="text/plain")
+        if tab_name not in PRO_TAB_NAMES:
+            return Response("Unknown Pro tab.", status=404, mimetype="text/plain")
+        if load_pro_run_from_db(tab_name, run_id) is None:
+            return Response("Pro run not found.", status=404, mimetype="text/plain")
+        set_selected_pro_run_id(tab_name, run_id)
+        return redirect(url_for("index") + f"#{tab_name}_recent_runs")
 
     if authenticated and request.method == "POST" and form_name == "upload":
         uploaded_file = request.files.get("data_file")
@@ -4704,7 +4731,7 @@ def load_pro_run(tab_name, run_id):
     if load_pro_run_from_db(tab_name, run_id) is None:
         return Response("Pro run not found.", status=404, mimetype="text/plain")
     set_selected_pro_run_id(tab_name, run_id)
-    return redirect(url_for("index") + f"#{tab_name}")
+    return redirect(url_for("index") + f"#{tab_name}_recent_runs")
 
 
 def selected_pro_run_snapshot(tab_name):
@@ -4770,6 +4797,16 @@ def durable_download_artifact(result_type, artifact):
     return None
 
 
+def model_comparison_pdf_artifact(result_type):
+    current_id = dataset_id()
+    csv_data = DOWNLOADS.get(current_id, {}).get(result_type, {}).get("model_comparison") if current_id else None
+    if csv_data is None:
+        csv_data = durable_download_artifact(result_type, "model_comparison")
+    if csv_data is None:
+        return None
+    return report_renderer.model_comparison_pdf_bytes(csv_data)
+
+
 @app.route("/download/<result_type>/<artifact>")
 def download_result(result_type, artifact):
     if not is_user_authenticated():
@@ -4793,6 +4830,17 @@ def download_result(result_type, artifact):
         filename = f"{result_type}_report.pdf"
         return Response(
             report_pdf,
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    if artifact == "model_comparison_pdf":
+        comparison_pdf = model_comparison_pdf_artifact(result_type)
+        if comparison_pdf is None:
+            return Response("No model comparison PDF is available for this selection.", status=404, mimetype="text/plain")
+        filename = f"{result_type}_model_comparison.pdf"
+        return Response(
+            comparison_pdf,
             mimetype="application/pdf",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )

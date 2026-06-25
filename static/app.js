@@ -156,9 +156,16 @@ function hideAccountSubscriptionOverlay() {
 
 function activateTab(hash) {
   const validTabs = ["#classification", "#regression", "#pro_classification", "#pro_regression"];
-  const target = validTabs.includes(hash) ? hash.slice(1) : "data";
+  const scrollTarget = hash.endsWith("_recent_runs") ? document.querySelector(hash) : null;
+  const tabHash = scrollTarget ? `#${hash.slice(1).replace("_recent_runs", "")}` : hash;
+  const target = validTabs.includes(tabHash) ? tabHash.slice(1) : "data";
   tabs.forEach((tab) => tab.classList.toggle("active", tab.getAttribute("href") === `#${target}`));
   panels.forEach((panel) => panel.classList.toggle("active", panel.id === target));
+  if (scrollTarget) {
+    window.requestAnimationFrame(() => {
+      scrollTarget.scrollIntoView({ block: "start" });
+    });
+  }
 }
 
 tabs.forEach((tab) => {
