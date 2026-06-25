@@ -372,6 +372,19 @@ button:hover {
 .download-links a:hover {
   border-color: var(--accent);
 }
+.inline-form {
+  margin: 0;
+}
+.small-action {
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 7px 10px;
+}
+.loaded-run {
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 750;
+}
 .error {
   color: var(--danger);
   font-weight: 650;

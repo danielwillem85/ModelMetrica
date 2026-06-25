@@ -282,6 +282,7 @@ def save_dataset(data, filename):
     current_id = str(uuid4())
     DATASETS[current_id] = {"data": data, "filename": filename}
     session["dataset_id"] = current_id
+    session["selected_pro_run_ids"] = {}
 
     user_id = current_user_id()
     if user_id:
@@ -576,6 +577,33 @@ def parse_tuning_iterations(value):
 
 def dataset_id():
     return session.get("dataset_id")
+
+
+def selected_pro_run_key(tab_name):
+    current_id = dataset_id()
+    if not current_id:
+        return None
+    return f"{current_id}:{tab_name}"
+
+
+def selected_pro_run_id(tab_name):
+    key = selected_pro_run_key(tab_name)
+    if not key:
+        return None
+    selected_runs = session.get("selected_pro_run_ids", {})
+    try:
+        return int(selected_runs.get(key))
+    except (TypeError, ValueError):
+        return None
+
+
+def set_selected_pro_run_id(tab_name, run_id):
+    key = selected_pro_run_key(tab_name)
+    if not key:
+        return
+    selected_runs = dict(session.get("selected_pro_run_ids", {}))
+    selected_runs[key] = int(run_id)
+    session["selected_pro_run_ids"] = selected_runs
 
 
 def metric_rows(metrics):
@@ -4067,7 +4095,7 @@ def load_pro_runs_from_db(tab_name):
     with get_db_connection() as connection:
         rows = connection.execute(
             """
-            SELECT snapshot_json
+            SELECT id, snapshot_json
             FROM pro_runs
             WHERE user_id = ? AND dataset_id = ? AND tab_name = ?
             ORDER BY id DESC
@@ -4077,14 +4105,49 @@ def load_pro_runs_from_db(tab_name):
         ).fetchall()
     for row in rows:
         try:
-            runs.append(json.loads(row["snapshot_json"]))
+            snapshot = json.loads(row["snapshot_json"])
         except json.JSONDecodeError:
             continue
+        snapshot["run_id"] = row["id"]
+        runs.append(snapshot)
     return runs
 
 
-def update_run_history(tab, runs):
-    tab["run_history"] = [run["history_entry"] for run in runs if run.get("history_entry")]
+def load_pro_run_from_db(tab_name, run_id):
+    user_id, current_id = current_pro_run_scope()
+    if not user_id or not current_id or tab_name not in PRO_TAB_NAMES:
+        return None
+
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, snapshot_json
+            FROM pro_runs
+            WHERE id = ? AND user_id = ? AND dataset_id = ? AND tab_name = ?
+            """,
+            (run_id, user_id, current_id, tab_name),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        snapshot = json.loads(row["snapshot_json"])
+    except json.JSONDecodeError:
+        return None
+    snapshot["run_id"] = row["id"]
+    return snapshot
+
+
+def update_run_history(tab, runs, active_run_id=None):
+    history = []
+    for run in runs:
+        entry = run.get("history_entry")
+        if not entry:
+            continue
+        entry = deepcopy(entry)
+        entry["run_id"] = run.get("run_id")
+        entry["is_selected"] = active_run_id is not None and entry["run_id"] == active_run_id
+        history.append(entry)
+    tab["run_history"] = history
 
 
 def prune_old_pro_runs(connection, user_id, current_id, tab_name):
@@ -4136,15 +4199,17 @@ def save_pro_run(tab):
         "history_entry": run_history_entry(tab),
     }
     with get_db_connection() as connection:
-        connection.execute(
+        cursor = connection.execute(
             """
             INSERT INTO pro_runs (user_id, dataset_id, tab_name, snapshot_json)
             VALUES (?, ?, ?, ?)
             """,
             (user_id, current_id, tab["form_name"], json.dumps(snapshot, default=pro_run_json_default)),
         )
+        current_run_id = cursor.lastrowid
         prune_old_pro_runs(connection, user_id, current_id, tab["form_name"])
-    update_run_history(tab, load_pro_runs_from_db(tab["form_name"]))
+    set_selected_pro_run_id(tab["form_name"], current_run_id)
+    update_run_history(tab, load_pro_runs_from_db(tab["form_name"]), current_run_id)
 
 
 def restore_download_artifacts(tab, snapshot):
@@ -4186,6 +4251,7 @@ def restore_pro_run(tab, snapshot):
     restore_download_artifacts(tab, snapshot)
     tab["report_download"] = pro_report_download(tab["form_name"])
     tab["report_pdf_download"] = pro_report_pdf_download(tab["form_name"])
+    tab["selected_run_id"] = snapshot.get("run_id")
 
 
 def restore_pro_runs(model_tabs, exclude=None):
@@ -4193,9 +4259,13 @@ def restore_pro_runs(model_tabs, exclude=None):
     for tab_name in PRO_TAB_NAMES:
         runs = load_pro_runs_from_db(tab_name)
         tab = model_tabs[tab_name]
-        if tab_name not in exclude and runs:
-            restore_pro_run(tab, runs[0])
-        update_run_history(tab, runs)
+        active_run = None
+        selected_id = selected_pro_run_id(tab_name)
+        if runs:
+            active_run = next((run for run in runs if run.get("run_id") == selected_id), None) or runs[0]
+        if tab_name not in exclude and active_run:
+            restore_pro_run(tab, active_run)
+        update_run_history(tab, runs, active_run.get("run_id") if active_run else None)
 
 def handle_classification_submission(tab, dataset):
     populate_tab_from_request(tab)
@@ -4625,7 +4695,24 @@ def mollie_webhook():
     return Response("OK", mimetype="text/plain")
 
 
-def latest_pro_run_snapshot(tab_name):
+@app.route("/pro-runs/<tab_name>/<int:run_id>/load", methods=["POST"])
+def load_pro_run(tab_name, run_id):
+    if not is_user_authenticated():
+        return Response("Authentication required.", status=401, mimetype="text/plain")
+    if tab_name not in PRO_TAB_NAMES:
+        return Response("Unknown Pro tab.", status=404, mimetype="text/plain")
+    if load_pro_run_from_db(tab_name, run_id) is None:
+        return Response("Pro run not found.", status=404, mimetype="text/plain")
+    set_selected_pro_run_id(tab_name, run_id)
+    return redirect(url_for("index") + f"#{tab_name}")
+
+
+def selected_pro_run_snapshot(tab_name):
+    selected_id = selected_pro_run_id(tab_name)
+    if selected_id is not None:
+        snapshot = load_pro_run_from_db(tab_name, selected_id)
+        if snapshot:
+            return snapshot
     runs = load_pro_runs_from_db(tab_name)
     return runs[0] if runs else None
 
@@ -4633,7 +4720,7 @@ def latest_pro_run_snapshot(tab_name):
 def durable_pro_report(result_type):
     if result_type not in PRO_TAB_NAMES:
         return None
-    snapshot = latest_pro_run_snapshot(result_type)
+    snapshot = selected_pro_run_snapshot(result_type)
     if not snapshot:
         return None
     return report_renderer.pro_report_html(result_type, snapshot, current_dataset())
@@ -4642,7 +4729,7 @@ def durable_pro_report(result_type):
 def durable_pro_report_pdf(result_type):
     if result_type not in PRO_TAB_NAMES:
         return None
-    snapshot = latest_pro_run_snapshot(result_type)
+    snapshot = selected_pro_run_snapshot(result_type)
     if not snapshot:
         return None
     return report_renderer.pro_report_pdf_bytes(result_type, snapshot, current_dataset())
@@ -4652,6 +4739,13 @@ def durable_download_artifact(result_type, artifact):
     user_id, current_id = current_pro_run_scope()
     if not user_id or not current_id or result_type not in PRO_TAB_NAMES:
         return None
+
+    selected_snapshot = selected_pro_run_snapshot(result_type)
+    if selected_snapshot:
+        csv_data = (selected_snapshot.get("download_artifacts") or {}).get(artifact)
+        if csv_data is not None:
+            DOWNLOADS.setdefault(current_id, {}).setdefault(result_type, {})[artifact] = csv_data
+            return csv_data
 
     with get_db_connection() as connection:
         rows = connection.execute(

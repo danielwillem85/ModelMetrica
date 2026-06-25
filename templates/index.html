@@ -227,6 +227,7 @@
                     <th>Models</th>
                     <th>Detail</th>
                     <th>Summary</th>
+                    <th>Result</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -237,6 +238,15 @@
                       <td>{{ run.models }}</td>
                       <td>{{ run.detail_model }}</td>
                       <td>{{ run.summary }}</td>
+                      <td>
+                        {% if run.is_selected %}
+                          <span class="loaded-run">Loaded</span>
+                        {% else %}
+                          <form class="inline-form" method="post" action="{{ url_for('load_pro_run', tab_name=tab.form_name, run_id=run.run_id) }}">
+                            <button class="small-action" type="submit">Load</button>
+                          </form>
+                        {% endif %}
+                      </td>
                     </tr>
                   {% endfor %}
                 </tbody>
@@ -609,6 +619,7 @@
                     <th>Models</th>
                     <th>Detail</th>
                     <th>Summary</th>
+                    <th>Result</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -619,6 +630,15 @@
                       <td>{{ run.models }}</td>
                       <td>{{ run.detail_model }}</td>
                       <td>{{ run.summary }}</td>
+                      <td>
+                        {% if run.is_selected %}
+                          <span class="loaded-run">Loaded</span>
+                        {% else %}
+                          <form class="inline-form" method="post" action="{{ url_for('load_pro_run', tab_name=tab.form_name, run_id=run.run_id) }}">
+                            <button class="small-action" type="submit">Load</button>
+                          </form>
+                        {% endif %}
+                      </td>
                     </tr>
                   {% endfor %}
                 </tbody>
