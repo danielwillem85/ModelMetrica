@@ -154,6 +154,42 @@ form {
   display: grid;
   gap: 14px;
 }
+.model-form {
+  align-items: start;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+.model-form .form-field {
+  min-width: 0;
+}
+.model-form select,
+.model-form input[type="number"] {
+  min-width: 0;
+  width: 100%;
+}
+.model-form .model-type-field {
+  grid-column: 1;
+}
+.model-form.has-detail-model .detail-model-field {
+  grid-column: 2;
+}
+.model-form.has-detail-model .target-field {
+  grid-column: 3;
+}
+.model-form.basic-model-form .target-field {
+  grid-column: 2;
+}
+.model-form .predictors-field {
+  grid-column: 1 / span 2;
+}
+.model-form .test-size-field {
+  grid-column: 3;
+}
+.model-form .options-field,
+.model-form .threshold-field,
+.model-form .run-field {
+  grid-column: 1 / -1;
+}
 .data-actions form + form {
   margin-top: 22px;
 }
@@ -201,7 +237,7 @@ select[multiple] {
 .options-grid {
   display: grid;
   gap: 14px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   padding: 14px;
 }
 .options-grid input,
@@ -308,6 +344,18 @@ button:hover {
   display: block;
   font-size: 22px;
   margin-top: 5px;
+}
+.details-importance-row {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.details-importance-row section {
+  min-width: 0;
+}
+.details-importance-row h3 {
+  margin-top: 0;
 }
 .table-wrap {
   overflow-x: auto;
@@ -541,7 +589,24 @@ tr:nth-child(even) td {
   }
 }
 @media (max-width: 760px) {
+  .model-form {
+    grid-template-columns: 1fr;
+  }
+  .model-form .model-type-field,
+  .model-form.has-detail-model .detail-model-field,
+  .model-form.has-detail-model .target-field,
+  .model-form.basic-model-form .target-field,
+  .model-form .predictors-field,
+  .model-form .test-size-field,
+  .model-form .options-field,
+  .model-form .threshold-field,
+  .model-form .run-field {
+    grid-column: 1;
+  }
   .metric-row {
+    grid-template-columns: 1fr;
+  }
+  .details-importance-row {
     grid-template-columns: 1fr;
   }
   .recommendation-grid {

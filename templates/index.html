@@ -4,12 +4,12 @@
           {% if not has_data %}
             <p class="error">Upload a dataset on the Data tab before running classification.</p>
           {% else %}
-            <form method="post" data-run-form {% if tab.allow_model_comparison %}data-pro-run-form{% endif %}>
+            <form method="post" class="model-form {{ 'has-detail-model' if tab.allow_model_comparison else 'basic-model-form' }}" data-run-form {% if tab.allow_model_comparison %}data-pro-run-form{% endif %}>
               <input type="hidden" name="form_name" value="{{ tab.form_name }}">
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
-              <div>
-                <label for="{{ tab.model_field }}">Model type</label>
-                <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="9"{% endif %} required>
+              <div class="form-field model-type-field">
+                <label for="{{ tab.model_field }}">Model type (multi select using CTRL button)</label>
+                <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="10"{% endif %} required>
                   <option value="logistic" {{ 'selected' if 'logistic' in tab.selected_models else '' }}>Logistic regression</option>
                   <option value="tree" {{ 'selected' if 'tree' in tab.selected_models else '' }}>Tree model</option>
                   <option value="random_forest" {{ 'selected' if 'random_forest' in tab.selected_models else '' }}>Random Forest</option>
@@ -27,7 +27,7 @@
                 </select>
               </div>
               {% if tab.allow_model_comparison %}
-              <div>
+              <div class="form-field detail-model-field">
                 <label for="{{ tab.detail_model_field }}">Detail model</label>
                 <select id="{{ tab.detail_model_field }}" name="{{ tab.detail_model_field }}" required>
                   <option value="best" {{ 'selected' if tab.selected_detail_model == 'best' else '' }}>Auto best</option>
@@ -44,7 +44,7 @@
                 </select>
               </div>
               {% endif %}
-              <div>
+              <div class="form-field target-field">
                 <label for="{{ tab.target_field }}">Target column</label>
                 <select id="{{ tab.target_field }}" name="{{ tab.target_field }}" required>
                   {% for column in columns %}
@@ -52,7 +52,7 @@
                   {% endfor %}
                 </select>
               </div>
-              <div>
+              <div class="form-field predictors-field">
                 <label for="{{ tab.predictors_field }}">Predictor columns</label>
                 <select id="{{ tab.predictors_field }}" name="{{ tab.predictors_field }}" multiple required>
                   {% for column in columns %}
@@ -61,7 +61,7 @@
                 </select>
                 <p>Select one or more predictors. Logistic and Elastic Net Logistic require exactly two target classes.</p>
               </div>
-              <div>
+              <div class="form-field test-size-field">
                 <label for="{{ tab.test_size_field }}">Test set size</label>
                 <select id="{{ tab.test_size_field }}" name="{{ tab.test_size_field }}" required>
                   <option value="0.2" {{ 'selected' if tab.selected_test_size == 0.2 else '' }}>20%</option>
@@ -70,7 +70,7 @@
                   <option value="0.4" {{ 'selected' if tab.selected_test_size == 0.4 else '' }}>40%</option>
                 </select>
               </div>
-              <details class="options-panel">
+              <details class="options-panel form-field options-field">
                 <summary>Options</summary>
                 <div class="options-grid">
                   <div>
@@ -145,7 +145,7 @@
               </details>
               {% if tab.allow_model_comparison %}
               {% if tab.threshold_field %}
-              <div>
+              <div class="form-field threshold-field">
                 <label for="{{ tab.threshold_field }}">Decision threshold</label>
                 <div class="threshold-control">
                   <input id="{{ tab.threshold_field }}" name="{{ tab.threshold_field }}" type="range" min="0.05" max="0.95" step="0.001" value="{{ '%.3f'|format(tab.selected_threshold) }}" data-threshold-input>
@@ -154,7 +154,7 @@
               </div>
               {% endif %}
               {% endif %}
-              <div>
+              <div class="form-field run-field">
                 <button type="submit">Run</button>
               </div>
             </form>
@@ -282,16 +282,24 @@
                 {{ tab.output.coefficients_html|safe }}
               </div>
             {% endif %}
-            {% if tab.output.importances_html %}
-              <h3>Variable importance</h3>
-              <div class="table-wrap">
-                {{ tab.output.importances_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.details_html %}
-              <h3>Model details</h3>
-              <div class="table-wrap">
-                {{ tab.output.details_html|safe }}
+            {% if tab.output.details_html or tab.output.importances_html %}
+              <div class="details-importance-row">
+                {% if tab.output.details_html %}
+                  <section>
+                    <h3>Model details</h3>
+                    <div class="table-wrap">
+                      {{ tab.output.details_html|safe }}
+                    </div>
+                  </section>
+                {% endif %}
+                {% if tab.output.importances_html %}
+                  <section>
+                    <h3>Variable importance</h3>
+                    <div class="table-wrap">
+                      {{ tab.output.importances_html|safe }}
+                    </div>
+                  </section>
+                {% endif %}
               </div>
             {% endif %}
             {% if tab.output.cv_summary_html or tab.output.cv_diagnostics_html or tab.output.cv_plot %}
@@ -357,12 +365,12 @@
           {% if not has_data %}
             <p class="error">Upload a dataset on the Data tab before running regression.</p>
           {% else %}
-            <form method="post" data-run-form {% if tab.allow_model_comparison %}data-pro-run-form{% endif %}>
+            <form method="post" class="model-form {{ 'has-detail-model' if tab.allow_model_comparison else 'basic-model-form' }}" data-run-form {% if tab.allow_model_comparison %}data-pro-run-form{% endif %}>
               <input type="hidden" name="form_name" value="{{ tab.form_name }}">
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
-              <div>
-                <label for="{{ tab.model_field }}">Model type</label>
-                <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="7"{% endif %} required>
+              <div class="form-field model-type-field">
+                <label for="{{ tab.model_field }}">Model type (multi select using CTRL button)</label>
+                <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="8"{% endif %} required>
                   <option value="linear" {{ 'selected' if 'linear' in tab.selected_models else '' }}>Linear Regression</option>
                   <option value="ridge" {{ 'selected' if 'ridge' in tab.selected_models else '' }}>Ridge Regression</option>
                   <option value="lasso" {{ 'selected' if 'lasso' in tab.selected_models else '' }}>Lasso Regression</option>
@@ -373,7 +381,7 @@
                 </select>
               </div>
               {% if tab.allow_model_comparison %}
-              <div>
+              <div class="form-field detail-model-field">
                 <label for="{{ tab.detail_model_field }}">Detail model</label>
                 <select id="{{ tab.detail_model_field }}" name="{{ tab.detail_model_field }}" required>
                   <option value="best" {{ 'selected' if tab.selected_detail_model == 'best' else '' }}>Auto best</option>
@@ -387,7 +395,7 @@
                 </select>
               </div>
               {% endif %}
-              <div>
+              <div class="form-field target-field">
                 <label for="{{ tab.target_field }}">Numeric target column</label>
                 <select id="{{ tab.target_field }}" name="{{ tab.target_field }}" required>
                   {% for column in columns %}
@@ -395,7 +403,7 @@
                   {% endfor %}
                 </select>
               </div>
-              <div>
+              <div class="form-field predictors-field">
                 <label for="{{ tab.predictors_field }}">Predictor columns</label>
                 <select id="{{ tab.predictors_field }}" name="{{ tab.predictors_field }}" multiple required>
                   {% for column in columns %}
@@ -404,7 +412,7 @@
                 </select>
                 <p>Select one or more predictors. Categorical predictors are automatically encoded.</p>
               </div>
-              <div>
+              <div class="form-field test-size-field">
                 <label for="{{ tab.test_size_field }}">Test set size</label>
                 <select id="{{ tab.test_size_field }}" name="{{ tab.test_size_field }}" required>
                   <option value="0.2" {{ 'selected' if tab.selected_test_size == 0.2 else '' }}>20%</option>
@@ -413,7 +421,7 @@
                   <option value="0.4" {{ 'selected' if tab.selected_test_size == 0.4 else '' }}>40%</option>
                 </select>
               </div>
-              <details class="options-panel">
+              <details class="options-panel form-field options-field">
                 <summary>Options</summary>
                 <div class="options-grid">
                   <div>
@@ -476,7 +484,7 @@
                   {% endif %}
                 </div>
               </details>
-              <div>
+              <div class="form-field run-field">
                 <button type="submit">Run</button>
               </div>
             </form>
@@ -604,16 +612,24 @@
                 {{ tab.output.coefficients_html|safe }}
               </div>
             {% endif %}
-            {% if tab.output.importances_html %}
-              <h3>Variable importance</h3>
-              <div class="table-wrap">
-                {{ tab.output.importances_html|safe }}
-              </div>
-            {% endif %}
-            {% if tab.output.details_html %}
-              <h3>Model details</h3>
-              <div class="table-wrap">
-                {{ tab.output.details_html|safe }}
+            {% if tab.output.details_html or tab.output.importances_html %}
+              <div class="details-importance-row">
+                {% if tab.output.details_html %}
+                  <section>
+                    <h3>Model details</h3>
+                    <div class="table-wrap">
+                      {{ tab.output.details_html|safe }}
+                    </div>
+                  </section>
+                {% endif %}
+                {% if tab.output.importances_html %}
+                  <section>
+                    <h3>Variable importance</h3>
+                    <div class="table-wrap">
+                      {{ tab.output.importances_html|safe }}
+                    </div>
+                  </section>
+                {% endif %}
               </div>
             {% endif %}
             {% if tab.output.cv_summary_html or tab.output.cv_diagnostics_html or tab.output.cv_plot %}
