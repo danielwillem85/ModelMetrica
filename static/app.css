@@ -9,6 +9,9 @@
   --danger: #b42318;
 }
 * { box-sizing: border-box; }
+[hidden] {
+  display: none !important;
+}
 body {
   margin: 0;
   background: var(--page);
@@ -176,6 +179,35 @@ select {
 select[multiple] {
   min-height: 150px;
 }
+.model-type-select[multiple] {
+  height: auto;
+  min-height: 0;
+}
+.options-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 0;
+}
+.options-panel summary {
+  cursor: pointer;
+  font-weight: 750;
+  list-style-position: inside;
+  padding: 12px 14px;
+}
+.options-panel[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+.options-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 14px;
+}
+.options-grid input,
+.options-grid select {
+  width: 100%;
+}
 button {
   border: 1px solid var(--accent);
   border-radius: 6px;
@@ -211,6 +243,16 @@ button:hover {
   display: grid;
   gap: 22px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.auth-card form {
+  align-content: start;
+}
+.signup-panel {
+  align-self: start;
+}
+.signup-panel button[data-show-signup] {
+  margin-top: 34px;
+  width: 100%;
 }
 .auth-card input {
   border: 1px solid var(--line);
@@ -503,6 +545,9 @@ tr:nth-child(even) td {
     grid-template-columns: 1fr;
   }
   .recommendation-grid {
+    grid-template-columns: 1fr;
+  }
+  .options-grid {
     grid-template-columns: 1fr;
   }
   .auth-grid {

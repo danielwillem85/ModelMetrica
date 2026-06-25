@@ -3680,6 +3680,7 @@ def handle_regression_submission(tab, dataset):
 def index():
     active_tab = request.form.get("active_tab", "data")
     auth_error = None
+    auth_mode = None
     data_error = None
     form_name = request.form.get("form_name")
     model_tabs = make_model_tabs()
@@ -3687,7 +3688,11 @@ def index():
     if request.method == "POST" and form_name == "signup":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        auth_mode = "signup"
         try:
+            if password != confirm_password:
+                raise ValueError("Passwords do not match.")
             user_id = create_user(username, password)
             log_user_in(user_id, username.strip())
             return redirect(url_for("index"))
@@ -3699,6 +3704,7 @@ def index():
         password = request.form.get("password", "")
         user = authenticate_user(username, password)
         if user is None:
+            auth_mode = "login"
             auth_error = "Username or password is incorrect."
         else:
             log_user_in(user["id"], user["username"])
@@ -3771,6 +3777,7 @@ def index():
         "index.html",
         active_tab=active_tab,
         auth_error=auth_error,
+        auth_mode=auth_mode,
         is_authenticated=authenticated,
         current_username=session.get("username"),
         has_subscription=has_subscription,

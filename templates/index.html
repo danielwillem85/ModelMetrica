@@ -9,7 +9,7 @@
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div>
                 <label for="{{ tab.model_field }}">Model type</label>
-                <select id="{{ tab.model_field }}" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple{% endif %} required>
+                <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="9"{% endif %} required>
                   <option value="logistic" {{ 'selected' if 'logistic' in tab.selected_models else '' }}>Logistic regression</option>
                   <option value="tree" {{ 'selected' if 'tree' in tab.selected_models else '' }}>Tree model</option>
                   <option value="random_forest" {{ 'selected' if 'random_forest' in tab.selected_models else '' }}>Random Forest</option>
@@ -70,73 +70,80 @@
                   <option value="0.4" {{ 'selected' if tab.selected_test_size == 0.4 else '' }}>40%</option>
                 </select>
               </div>
-              <div>
-                <label for="{{ tab.cv_folds_field }}">Cross-validation</label>
-                <select id="{{ tab.cv_folds_field }}" name="{{ tab.cv_folds_field }}" required>
-                  <option value="0" {{ 'selected' if tab.selected_cv_folds == 0 else '' }}>Off</option>
-                  <option value="3" {{ 'selected' if tab.selected_cv_folds == 3 else '' }}>3 folds</option>
-                  <option value="5" {{ 'selected' if tab.selected_cv_folds == 5 else '' }}>5 folds</option>
-                  <option value="10" {{ 'selected' if tab.selected_cv_folds == 10 else '' }}>10 folds</option>
-                </select>
-              </div>
+              <details class="options-panel">
+                <summary>Options</summary>
+                <div class="options-grid">
+                  <div>
+                    <label for="{{ tab.cv_folds_field }}">Cross-validation</label>
+                    <select id="{{ tab.cv_folds_field }}" name="{{ tab.cv_folds_field }}" required>
+                      <option value="0" {{ 'selected' if tab.selected_cv_folds == 0 else '' }}>Off</option>
+                      <option value="3" {{ 'selected' if tab.selected_cv_folds == 3 else '' }}>3 folds</option>
+                      <option value="5" {{ 'selected' if tab.selected_cv_folds == 5 else '' }}>5 folds</option>
+                      <option value="10" {{ 'selected' if tab.selected_cv_folds == 10 else '' }}>10 folds</option>
+                    </select>
+                  </div>
+                  {% if tab.allow_model_comparison %}
+                  <div>
+                    <label for="{{ tab.missing_values_field }}">Missing values</label>
+                    <select id="{{ tab.missing_values_field }}" name="{{ tab.missing_values_field }}" required>
+                      <option value="drop" {{ 'selected' if tab.selected_missing_values == 'drop' else '' }}>Drop incomplete rows</option>
+                      <option value="impute_mean_mode" {{ 'selected' if tab.selected_missing_values == 'impute_mean_mode' else '' }}>Impute mean/mode</option>
+                      <option value="impute_median_mode" {{ 'selected' if tab.selected_missing_values == 'impute_median_mode' else '' }}>Impute median/mode</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="{{ tab.categorical_encoding_field }}">Categorical encoding</label>
+                    <select id="{{ tab.categorical_encoding_field }}" name="{{ tab.categorical_encoding_field }}" required>
+                      <option value="one_hot_drop_first" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_drop_first' else '' }}>One-hot, drop first</option>
+                      <option value="one_hot_full" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_full' else '' }}>One-hot, all levels</option>
+                      <option value="ordinal" {{ 'selected' if tab.selected_categorical_encoding == 'ordinal' else '' }}>Ordinal codes</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="{{ tab.scaling_field }}">Feature scaling</label>
+                    <select id="{{ tab.scaling_field }}" name="{{ tab.scaling_field }}" required>
+                      <option value="on" {{ 'selected' if tab.selected_scaling == 'on' else '' }}>On</option>
+                      <option value="off" {{ 'selected' if tab.selected_scaling == 'off' else '' }}>Off</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="{{ tab.split_seed_field }}">Split seed</label>
+                    <input id="{{ tab.split_seed_field }}" name="{{ tab.split_seed_field }}" type="number" min="0" max="999999" step="1" value="{{ tab.selected_split_seed }}" required>
+                  </div>
+                  <div>
+                    <label for="{{ tab.outlier_handling_field }}">Outliers</label>
+                    <select id="{{ tab.outlier_handling_field }}" name="{{ tab.outlier_handling_field }}" required>
+                      <option value="none" {{ 'selected' if tab.selected_outlier_handling == 'none' else '' }}>No handling</option>
+                      <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
+                      <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
+                    </select>
+                  </div>
+                  {% if tab.calibration_field %}
+                  <div>
+                    <label for="{{ tab.calibration_field }}">Probability calibration</label>
+                    <select id="{{ tab.calibration_field }}" name="{{ tab.calibration_field }}" required>
+                      <option value="off" {{ 'selected' if tab.selected_calibration == 'off' else '' }}>Off</option>
+                      <option value="sigmoid" {{ 'selected' if tab.selected_calibration == 'sigmoid' else '' }}>Sigmoid</option>
+                      <option value="isotonic" {{ 'selected' if tab.selected_calibration == 'isotonic' else '' }}>Isotonic</option>
+                    </select>
+                  </div>
+                  {% endif %}
+                  <div>
+                    <label for="{{ tab.tuning_mode_field }}">Hyperparameter tuning</label>
+                    <select id="{{ tab.tuning_mode_field }}" name="{{ tab.tuning_mode_field }}" required>
+                      <option value="off" {{ 'selected' if tab.selected_tuning_mode == 'off' else '' }}>Off</option>
+                      <option value="grid" {{ 'selected' if tab.selected_tuning_mode == 'grid' else '' }}>Grid search</option>
+                      <option value="random" {{ 'selected' if tab.selected_tuning_mode == 'random' else '' }}>Random search</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="{{ tab.tuning_iterations_field }}">Random search iterations</label>
+                    <input id="{{ tab.tuning_iterations_field }}" name="{{ tab.tuning_iterations_field }}" type="number" min="3" max="30" step="1" value="{{ tab.selected_tuning_iterations }}" required>
+                  </div>
+                  {% endif %}
+                </div>
+              </details>
               {% if tab.allow_model_comparison %}
-              <div>
-                <label for="{{ tab.missing_values_field }}">Missing values</label>
-                <select id="{{ tab.missing_values_field }}" name="{{ tab.missing_values_field }}" required>
-                  <option value="drop" {{ 'selected' if tab.selected_missing_values == 'drop' else '' }}>Drop incomplete rows</option>
-                  <option value="impute_mean_mode" {{ 'selected' if tab.selected_missing_values == 'impute_mean_mode' else '' }}>Impute mean/mode</option>
-                  <option value="impute_median_mode" {{ 'selected' if tab.selected_missing_values == 'impute_median_mode' else '' }}>Impute median/mode</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.categorical_encoding_field }}">Categorical encoding</label>
-                <select id="{{ tab.categorical_encoding_field }}" name="{{ tab.categorical_encoding_field }}" required>
-                  <option value="one_hot_drop_first" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_drop_first' else '' }}>One-hot, drop first</option>
-                  <option value="one_hot_full" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_full' else '' }}>One-hot, all levels</option>
-                  <option value="ordinal" {{ 'selected' if tab.selected_categorical_encoding == 'ordinal' else '' }}>Ordinal codes</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.scaling_field }}">Feature scaling</label>
-                <select id="{{ tab.scaling_field }}" name="{{ tab.scaling_field }}" required>
-                  <option value="on" {{ 'selected' if tab.selected_scaling == 'on' else '' }}>On</option>
-                  <option value="off" {{ 'selected' if tab.selected_scaling == 'off' else '' }}>Off</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.split_seed_field }}">Split seed</label>
-                <input id="{{ tab.split_seed_field }}" name="{{ tab.split_seed_field }}" type="number" min="0" max="999999" step="1" value="{{ tab.selected_split_seed }}" required>
-              </div>
-              <div>
-                <label for="{{ tab.outlier_handling_field }}">Outliers</label>
-                <select id="{{ tab.outlier_handling_field }}" name="{{ tab.outlier_handling_field }}" required>
-                  <option value="none" {{ 'selected' if tab.selected_outlier_handling == 'none' else '' }}>No handling</option>
-                  <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
-                  <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
-                </select>
-              </div>
-              {% if tab.calibration_field %}
-              <div>
-                <label for="{{ tab.calibration_field }}">Probability calibration</label>
-                <select id="{{ tab.calibration_field }}" name="{{ tab.calibration_field }}" required>
-                  <option value="off" {{ 'selected' if tab.selected_calibration == 'off' else '' }}>Off</option>
-                  <option value="sigmoid" {{ 'selected' if tab.selected_calibration == 'sigmoid' else '' }}>Sigmoid</option>
-                  <option value="isotonic" {{ 'selected' if tab.selected_calibration == 'isotonic' else '' }}>Isotonic</option>
-                </select>
-              </div>
-              {% endif %}
-              <div>
-                <label for="{{ tab.tuning_mode_field }}">Hyperparameter tuning</label>
-                <select id="{{ tab.tuning_mode_field }}" name="{{ tab.tuning_mode_field }}" required>
-                  <option value="off" {{ 'selected' if tab.selected_tuning_mode == 'off' else '' }}>Off</option>
-                  <option value="grid" {{ 'selected' if tab.selected_tuning_mode == 'grid' else '' }}>Grid search</option>
-                  <option value="random" {{ 'selected' if tab.selected_tuning_mode == 'random' else '' }}>Random search</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.tuning_iterations_field }}">Random search iterations</label>
-                <input id="{{ tab.tuning_iterations_field }}" name="{{ tab.tuning_iterations_field }}" type="number" min="3" max="30" step="1" value="{{ tab.selected_tuning_iterations }}" required>
-              </div>
               {% if tab.threshold_field %}
               <div>
                 <label for="{{ tab.threshold_field }}">Decision threshold</label>
@@ -355,7 +362,7 @@
               <input type="hidden" name="active_tab" value="{{ tab.id }}">
               <div>
                 <label for="{{ tab.model_field }}">Model type</label>
-                <select id="{{ tab.model_field }}" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple{% endif %} required>
+                <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="7"{% endif %} required>
                   <option value="linear" {{ 'selected' if 'linear' in tab.selected_models else '' }}>Linear Regression</option>
                   <option value="ridge" {{ 'selected' if 'ridge' in tab.selected_models else '' }}>Ridge Regression</option>
                   <option value="lasso" {{ 'selected' if 'lasso' in tab.selected_models else '' }}>Lasso Regression</option>
@@ -406,64 +413,69 @@
                   <option value="0.4" {{ 'selected' if tab.selected_test_size == 0.4 else '' }}>40%</option>
                 </select>
               </div>
-              <div>
-                <label for="{{ tab.cv_folds_field }}">Cross-validation</label>
-                <select id="{{ tab.cv_folds_field }}" name="{{ tab.cv_folds_field }}" required>
-                  <option value="0" {{ 'selected' if tab.selected_cv_folds == 0 else '' }}>Off</option>
-                  <option value="3" {{ 'selected' if tab.selected_cv_folds == 3 else '' }}>3 folds</option>
-                  <option value="5" {{ 'selected' if tab.selected_cv_folds == 5 else '' }}>5 folds</option>
-                  <option value="10" {{ 'selected' if tab.selected_cv_folds == 10 else '' }}>10 folds</option>
-                </select>
-              </div>
-              {% if tab.allow_model_comparison %}
-              <div>
-                <label for="{{ tab.missing_values_field }}">Missing values</label>
-                <select id="{{ tab.missing_values_field }}" name="{{ tab.missing_values_field }}" required>
-                  <option value="drop" {{ 'selected' if tab.selected_missing_values == 'drop' else '' }}>Drop incomplete rows</option>
-                  <option value="impute_mean_mode" {{ 'selected' if tab.selected_missing_values == 'impute_mean_mode' else '' }}>Impute mean/mode</option>
-                  <option value="impute_median_mode" {{ 'selected' if tab.selected_missing_values == 'impute_median_mode' else '' }}>Impute median/mode</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.categorical_encoding_field }}">Categorical encoding</label>
-                <select id="{{ tab.categorical_encoding_field }}" name="{{ tab.categorical_encoding_field }}" required>
-                  <option value="one_hot_drop_first" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_drop_first' else '' }}>One-hot, drop first</option>
-                  <option value="one_hot_full" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_full' else '' }}>One-hot, all levels</option>
-                  <option value="ordinal" {{ 'selected' if tab.selected_categorical_encoding == 'ordinal' else '' }}>Ordinal codes</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.scaling_field }}">Feature scaling</label>
-                <select id="{{ tab.scaling_field }}" name="{{ tab.scaling_field }}" required>
-                  <option value="on" {{ 'selected' if tab.selected_scaling == 'on' else '' }}>On</option>
-                  <option value="off" {{ 'selected' if tab.selected_scaling == 'off' else '' }}>Off</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.split_seed_field }}">Split seed</label>
-                <input id="{{ tab.split_seed_field }}" name="{{ tab.split_seed_field }}" type="number" min="0" max="999999" step="1" value="{{ tab.selected_split_seed }}" required>
-              </div>
-              <div>
-                <label for="{{ tab.outlier_handling_field }}">Outliers</label>
-                <select id="{{ tab.outlier_handling_field }}" name="{{ tab.outlier_handling_field }}" required>
-                  <option value="none" {{ 'selected' if tab.selected_outlier_handling == 'none' else '' }}>No handling</option>
-                  <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
-                  <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.tuning_mode_field }}">Hyperparameter tuning</label>
-                <select id="{{ tab.tuning_mode_field }}" name="{{ tab.tuning_mode_field }}" required>
-                  <option value="off" {{ 'selected' if tab.selected_tuning_mode == 'off' else '' }}>Off</option>
-                  <option value="grid" {{ 'selected' if tab.selected_tuning_mode == 'grid' else '' }}>Grid search</option>
-                  <option value="random" {{ 'selected' if tab.selected_tuning_mode == 'random' else '' }}>Random search</option>
-                </select>
-              </div>
-              <div>
-                <label for="{{ tab.tuning_iterations_field }}">Random search iterations</label>
-                <input id="{{ tab.tuning_iterations_field }}" name="{{ tab.tuning_iterations_field }}" type="number" min="3" max="30" step="1" value="{{ tab.selected_tuning_iterations }}" required>
-              </div>
-              {% endif %}
+              <details class="options-panel">
+                <summary>Options</summary>
+                <div class="options-grid">
+                  <div>
+                    <label for="{{ tab.cv_folds_field }}">Cross-validation</label>
+                    <select id="{{ tab.cv_folds_field }}" name="{{ tab.cv_folds_field }}" required>
+                      <option value="0" {{ 'selected' if tab.selected_cv_folds == 0 else '' }}>Off</option>
+                      <option value="3" {{ 'selected' if tab.selected_cv_folds == 3 else '' }}>3 folds</option>
+                      <option value="5" {{ 'selected' if tab.selected_cv_folds == 5 else '' }}>5 folds</option>
+                      <option value="10" {{ 'selected' if tab.selected_cv_folds == 10 else '' }}>10 folds</option>
+                    </select>
+                  </div>
+                  {% if tab.allow_model_comparison %}
+                  <div>
+                    <label for="{{ tab.missing_values_field }}">Missing values</label>
+                    <select id="{{ tab.missing_values_field }}" name="{{ tab.missing_values_field }}" required>
+                      <option value="drop" {{ 'selected' if tab.selected_missing_values == 'drop' else '' }}>Drop incomplete rows</option>
+                      <option value="impute_mean_mode" {{ 'selected' if tab.selected_missing_values == 'impute_mean_mode' else '' }}>Impute mean/mode</option>
+                      <option value="impute_median_mode" {{ 'selected' if tab.selected_missing_values == 'impute_median_mode' else '' }}>Impute median/mode</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="{{ tab.categorical_encoding_field }}">Categorical encoding</label>
+                    <select id="{{ tab.categorical_encoding_field }}" name="{{ tab.categorical_encoding_field }}" required>
+                      <option value="one_hot_drop_first" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_drop_first' else '' }}>One-hot, drop first</option>
+                      <option value="one_hot_full" {{ 'selected' if tab.selected_categorical_encoding == 'one_hot_full' else '' }}>One-hot, all levels</option>
+                      <option value="ordinal" {{ 'selected' if tab.selected_categorical_encoding == 'ordinal' else '' }}>Ordinal codes</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="{{ tab.scaling_field }}">Feature scaling</label>
+                    <select id="{{ tab.scaling_field }}" name="{{ tab.scaling_field }}" required>
+                      <option value="on" {{ 'selected' if tab.selected_scaling == 'on' else '' }}>On</option>
+                      <option value="off" {{ 'selected' if tab.selected_scaling == 'off' else '' }}>Off</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="{{ tab.split_seed_field }}">Split seed</label>
+                    <input id="{{ tab.split_seed_field }}" name="{{ tab.split_seed_field }}" type="number" min="0" max="999999" step="1" value="{{ tab.selected_split_seed }}" required>
+                  </div>
+                  <div>
+                    <label for="{{ tab.outlier_handling_field }}">Outliers</label>
+                    <select id="{{ tab.outlier_handling_field }}" name="{{ tab.outlier_handling_field }}" required>
+                      <option value="none" {{ 'selected' if tab.selected_outlier_handling == 'none' else '' }}>No handling</option>
+                      <option value="winsorize" {{ 'selected' if tab.selected_outlier_handling == 'winsorize' else '' }}>Winsorize numeric columns</option>
+                      <option value="remove_iqr" {{ 'selected' if tab.selected_outlier_handling == 'remove_iqr' else '' }}>Remove IQR outliers</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="{{ tab.tuning_mode_field }}">Hyperparameter tuning</label>
+                    <select id="{{ tab.tuning_mode_field }}" name="{{ tab.tuning_mode_field }}" required>
+                      <option value="off" {{ 'selected' if tab.selected_tuning_mode == 'off' else '' }}>Off</option>
+                      <option value="grid" {{ 'selected' if tab.selected_tuning_mode == 'grid' else '' }}>Grid search</option>
+                      <option value="random" {{ 'selected' if tab.selected_tuning_mode == 'random' else '' }}>Random search</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="{{ tab.tuning_iterations_field }}">Random search iterations</label>
+                    <input id="{{ tab.tuning_iterations_field }}" name="{{ tab.tuning_iterations_field }}" type="number" min="3" max="30" step="1" value="{{ tab.selected_tuning_iterations }}" required>
+                  </div>
+                  {% endif %}
+                </div>
+              </details>
               <div>
                 <button type="submit">Run</button>
               </div>
@@ -766,19 +778,26 @@
               </div>
               <button type="submit">Log in</button>
             </form>
-            <form method="post">
-              <input type="hidden" name="form_name" value="signup">
-              <h3>Sign up</h3>
-              <div>
-                <label for="signup_username">Username</label>
-                <input id="signup_username" name="username" autocomplete="username" required>
-              </div>
-              <div>
-                <label for="signup_password">Password</label>
-                <input id="signup_password" name="password" type="password" autocomplete="new-password" minlength="6" required>
-              </div>
-              <button type="submit">Create account</button>
-            </form>
+            <div class="signup-panel">
+              <button type="button" data-show-signup {% if auth_mode == 'signup' %}hidden{% endif %}>Create account</button>
+              <form method="post" data-signup-form {% if auth_mode != 'signup' %}hidden{% endif %}>
+                <input type="hidden" name="form_name" value="signup">
+                <h3>Sign up</h3>
+                <div>
+                  <label for="signup_username">Username</label>
+                  <input id="signup_username" name="username" autocomplete="username" required>
+                </div>
+                <div>
+                  <label for="signup_password">Password</label>
+                  <input id="signup_password" name="password" type="password" autocomplete="new-password" minlength="6" required>
+                </div>
+                <div>
+                  <label for="signup_confirm_password">Confirm password</label>
+                  <input id="signup_confirm_password" name="confirm_password" type="password" autocomplete="new-password" minlength="6" required>
+                </div>
+                <button type="submit">Create account</button>
+              </form>
+            </div>
           </div>
         </div>
       </div>

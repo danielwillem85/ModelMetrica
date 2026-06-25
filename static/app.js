@@ -3,6 +3,10 @@ const panels = document.querySelectorAll(".tab-panel");
 const processingOverlay = document.getElementById("processing-overlay");
 const subscriptionOverlay = document.getElementById("subscription-overlay");
 const hasSubscription = document.body.dataset.hasSubscription === "true";
+const signupToggle = document.querySelector("[data-show-signup]");
+const signupForm = document.querySelector("[data-signup-form]");
+const signupPassword = document.getElementById("signup_password");
+const signupConfirmPassword = document.getElementById("signup_confirm_password");
 
 function showProcessingOverlay() {
   if (processingOverlay) {
@@ -36,6 +40,25 @@ tabs.forEach((tab) => {
     activateTab(tab.getAttribute("href"));
   });
 });
+
+function validateSignupPasswords() {
+  if (!signupPassword || !signupConfirmPassword) {
+    return;
+  }
+  const mismatch = signupConfirmPassword.value && signupPassword.value !== signupConfirmPassword.value;
+  signupConfirmPassword.setCustomValidity(mismatch ? "Passwords do not match." : "");
+}
+
+if (signupToggle && signupForm) {
+  signupToggle.addEventListener("click", () => {
+    signupForm.hidden = false;
+    signupToggle.hidden = true;
+    signupForm.querySelector("input[name='username']")?.focus();
+  });
+}
+
+signupPassword?.addEventListener("input", validateSignupPasswords);
+signupConfirmPassword?.addEventListener("input", validateSignupPasswords);
 
 document.querySelectorAll(".model-comparison tbody tr[data-model-name]").forEach((row) => {
   row.addEventListener("click", () => {
