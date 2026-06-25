@@ -8,6 +8,8 @@ import math
 import os
 from pathlib import Path
 from secrets import randbelow
+from threading import Lock
+import time
 from uuid import uuid4
 
 import matplotlib
@@ -17,7 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
-from flask import Flask, Response, redirect, render_template, request, session, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 from sklearn.ensemble import (
     AdaBoostClassifier,
     ExtraTreesRegressor,
@@ -27,11 +29,12 @@ from sklearn.ensemble import (
     HistGradientBoostingClassifier,
     RandomForestClassifier,
     RandomForestRegressor,
+    StackingRegressor,
 )
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.inspection import permutation_importance
-from sklearn.linear_model import ElasticNet, HuberRegressor, Lasso, LinearRegression, LogisticRegression, Ridge, SGDClassifier
+from sklearn.linear_model import BayesianRidge, ElasticNet, HuberRegressor, Lasso, LinearRegression, LogisticRegression, QuantileRegressor, Ridge, SGDClassifier
 from sklearn.metrics import accuracy_score, average_precision_score, auc, precision_recall_curve, roc_curve
 from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.naive_bayes import GaussianNB
@@ -62,6 +65,16 @@ except ImportError:
     LGBMClassifier = None
     LGBMRegressor = None
 
+try:
+    from xgboost import XGBRegressor
+except ImportError:
+    XGBRegressor = None
+
+try:
+    from catboost import CatBoostRegressor
+except ImportError:
+    CatBoostRegressor = None
+
 
 try:
     from dotenv import load_dotenv
@@ -88,6 +101,66 @@ app.secret_key = "dev-secret-change-me"
 ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx"}
 DATASETS = {}
 DOWNLOADS = {}
+RUN_PROGRESS = {}
+RUN_PROGRESS_LOCK = Lock()
+
+
+def cleanup_run_progress():
+    cutoff = time.time() - 60 * 60
+    with RUN_PROGRESS_LOCK:
+        expired = [job_id for job_id, progress in RUN_PROGRESS.items() if progress.get("updated_at", 0) < cutoff]
+        for job_id in expired:
+            RUN_PROGRESS.pop(job_id, None)
+
+
+def active_run_progress_id():
+    return request.form.get("run_progress_id", "").strip()
+
+
+def initialize_run_progress(job_id, total):
+    if not job_id:
+        return
+    cleanup_run_progress()
+    total = max(int(total or 0), 0)
+    with RUN_PROGRESS_LOCK:
+        RUN_PROGRESS[job_id] = {
+            "completed": 0,
+            "total": total,
+            "percent": 0,
+            "status": "running",
+            "label": "",
+            "updated_at": time.time(),
+        }
+
+
+def advance_run_progress(job_id, label=""):
+    if not job_id:
+        return
+    with RUN_PROGRESS_LOCK:
+        progress = RUN_PROGRESS.get(job_id)
+        if progress is None:
+            return
+        total = max(progress.get("total", 0), 0)
+        completed = min(progress.get("completed", 0) + 1, total) if total else progress.get("completed", 0) + 1
+        progress["completed"] = completed
+        progress["label"] = label
+        progress["percent"] = int((completed / total) * 100) if total else 100
+        progress["status"] = "complete" if total and completed >= total else "running"
+        progress["updated_at"] = time.time()
+
+
+def complete_run_progress(job_id):
+    if not job_id:
+        return
+    with RUN_PROGRESS_LOCK:
+        progress = RUN_PROGRESS.get(job_id)
+        if progress is None:
+            return
+        total = max(progress.get("total", 0), 0)
+        progress["completed"] = total
+        progress["percent"] = 100
+        progress["status"] = "complete"
+        progress["updated_at"] = time.time()
 DISPLAY_DECIMALS = 3
 DISPLAY_FLOAT_FORMAT = f"{{:.{DISPLAY_DECIMALS}f}}".format
 MAX_SPLIT_SEED = 999999
@@ -697,6 +770,20 @@ def regression_estimator(model_name, options=None):
             max_iter=1000,
         )
         return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+    if model_name == "bayesian_ridge":
+        model = BayesianRidge(
+            alpha_1=tuned_float(options, "bayesian_ridge", "alpha_1", 1e-6),
+            lambda_1=tuned_float(options, "bayesian_ridge", "lambda_1", 1e-6),
+            max_iter=1000,
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+    if model_name == "quantile":
+        model = QuantileRegressor(
+            quantile=tuned_float(options, "quantile", "quantile", 0.5),
+            alpha=tuned_float(options, "quantile", "alpha", 0.0001),
+            solver="highs",
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     if model_name == "random_forest":
         return RandomForestRegressor(
             n_estimators=tuned_int(options, "random_forest", "n_estimators", 200),
@@ -732,6 +819,46 @@ def regression_estimator(model_name, options=None):
             random_state=preprocessing_seed(options),
             n_jobs=-1,
             verbosity=-1,
+        )
+    if model_name == "xgboost":
+        if XGBRegressor is None:
+            raise RuntimeError("XGBoost is not installed. Run pip install xgboost or install requirements.txt.")
+        return XGBRegressor(
+            n_estimators=tuned_int(options, "xgboost", "n_estimators", 200),
+            learning_rate=tuned_float(options, "xgboost", "learning_rate", 0.05),
+            max_depth=tuned_int(options, "xgboost", "max_depth", 4),
+            subsample=tuned_float(options, "xgboost", "subsample", 0.9),
+            colsample_bytree=tuned_float(options, "xgboost", "colsample_bytree", 0.9),
+            objective="reg:squarederror",
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+            verbosity=0,
+        )
+    if model_name == "catboost":
+        if CatBoostRegressor is None:
+            raise RuntimeError("CatBoost is not installed. Run pip install catboost or install requirements.txt.")
+        return CatBoostRegressor(
+            iterations=tuned_int(options, "catboost", "iterations", 200),
+            learning_rate=tuned_float(options, "catboost", "learning_rate", 0.05),
+            depth=tuned_int(options, "catboost", "depth", 6),
+            loss_function="RMSE",
+            random_seed=preprocessing_seed(options),
+            verbose=False,
+        )
+    if model_name == "stacking":
+        ridge_base = make_pipeline(StandardScaler(), Ridge(alpha=1.0)) if scaling_enabled(options) else Ridge(alpha=1.0)
+        svr_base = make_pipeline(StandardScaler(), SVR(C=1.0, epsilon=0.1))
+        base_estimators = [
+            ("ridge", ridge_base),
+            ("random_forest", RandomForestRegressor(n_estimators=100, max_depth=8, random_state=preprocessing_seed(options), n_jobs=-1)),
+            ("gradient_boosting", GradientBoostingRegressor(n_estimators=100, learning_rate=0.05, max_depth=3, random_state=preprocessing_seed(options))),
+            ("svr", svr_base),
+        ]
+        return StackingRegressor(
+            estimators=base_estimators,
+            final_estimator=Ridge(alpha=tuned_float(options, "stacking", "alpha", 1.0)),
+            passthrough=bool(tuned_param(options, "stacking", "passthrough", False)),
+            n_jobs=-1,
         )
     if model_name == "svr":
         model = SVR(
@@ -2136,6 +2263,154 @@ def fit_knn_regression(data, target, predictors, test_size, cv_folds, options=No
     }
 
 
+def estimator_leaf(estimator):
+    if hasattr(estimator, "named_steps"):
+        return list(estimator.named_steps.values())[-1]
+    return estimator
+
+
+def fitted_regression_coefficients(estimator, feature_names):
+    leaf = estimator_leaf(estimator)
+    if not hasattr(leaf, "coef_"):
+        return None
+    coefficients = np.ravel(leaf.coef_)
+    if len(coefficients) != len(feature_names):
+        return None
+    intercept = getattr(leaf, "intercept_", None)
+    if intercept is None:
+        return pd.DataFrame({"Term": feature_names, "Coefficient": coefficients})
+    return pd.DataFrame(
+        {
+            "Term": ["Intercept"] + list(feature_names),
+            "Coefficient": [float(np.ravel(intercept)[0])] + list(coefficients),
+        }
+    )
+
+
+def fitted_regression_importances(estimator, x_test, y_test, feature_names, options):
+    leaf = estimator_leaf(estimator)
+    if hasattr(leaf, "feature_importances_"):
+        return importance_frame(feature_names, leaf.feature_importances_)
+    return permutation_importance_frame(estimator, x_test, y_test, feature_names, "neg_root_mean_squared_error", options)
+
+
+def fit_generic_regression_model(data, target, predictors, test_size, cv_folds, model_name, model_label, description, options=None):
+    y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+    split = split_regression_data(y, x_encoded, test_size, options)
+    estimator = regression_estimator(model_name, options)
+    estimator.fit(split["x_train"], split["y_train"])
+    predictions = estimator.predict(split["x_test"])
+
+    metrics = [
+        {"label": "Train rows", "value": len(split["x_train"])},
+        {"label": "Test rows", "value": len(split["x_test"])},
+    ] + regression_metric_list(split["y_test"], predictions)[1:]
+    metrics = append_regression_cv(metrics, model_name, x_encoded, y, cv_folds, options)
+
+    details = {
+        "Model": model_label,
+        "Estimator": estimator_leaf(estimator).__class__.__name__,
+        "Test set size": f"{test_size:.0%}",
+        "CV folds requested": cv_folds if cv_folds else "Off",
+        "Random seed": preprocessing_seed(options),
+    }
+    coefficients = fitted_regression_coefficients(estimator, x_encoded.columns)
+    importances = None if coefficients is not None else fitted_regression_importances(
+        estimator,
+        split["x_test"],
+        split["y_test"],
+        x_encoded.columns,
+        options,
+    )
+
+    download_data = {"details": details_frame(add_preprocessing_details(details, options)).to_csv(index=False)}
+    if coefficients is not None:
+        download_data["coefficients"] = coefficients.to_csv(index=False)
+    if importances is not None:
+        download_data["variable_importance"] = importances.to_csv(index=False)
+
+    return {
+        "title": f"{model_label} results",
+        "description": f"Target: {target}. {description}",
+        "target": target,
+        "metrics": metrics,
+        "coefficients_html": display_table(coefficients, index=False, border=0, classes="coefficients") if coefficients is not None else None,
+        "importances_html": display_table(importances, index=False, border=0, classes="importances") if importances is not None else None,
+        "details_html": details_table(add_preprocessing_details(details, options)),
+        "download_data": download_data,
+    }
+
+
+def fit_bayesian_ridge_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "bayesian_ridge",
+        "Bayesian Ridge Regression",
+        "Regularized linear regression with Bayesian shrinkage; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_quantile_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "quantile",
+        "Quantile Regression",
+        "Median-oriented regression that can be tuned to other quantiles; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_xgboost_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "xgboost",
+        "XGBoost Regression",
+        "Gradient boosted tree regression using XGBoost; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_catboost_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "catboost",
+        "CatBoost Regression",
+        "Ordered boosted-tree regression using CatBoost; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_stacking_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "stacking",
+        "Stacking Regressor",
+        "Ensemble regression that blends several base models through a final meta-model; test-set metrics are shown.",
+        options,
+    )
+
+
 CLASSIFICATION_MODEL_FITTERS = {
     "logistic": fit_logistic_regression,
     "tree": fit_tree_model,
@@ -2162,10 +2437,15 @@ REGRESSION_MODEL_FITTERS = {
     "lasso": fit_lasso_regression,
     "elastic_net": fit_elastic_net_regression,
     "huber": fit_huber_regression,
+    "bayesian_ridge": fit_bayesian_ridge_regression,
+    "quantile": fit_quantile_regression,
     "random_forest": fit_random_forest_regression,
     "extra_trees": fit_extra_trees_regression,
     "gradient_boosting": fit_gradient_boosting_regression,
     "lightgbm": fit_lightgbm_regression,
+    "xgboost": fit_xgboost_regression,
+    "catboost": fit_catboost_regression,
+    "stacking": fit_stacking_regression,
     "svr": fit_svr_regression,
     "knn": fit_knn_regression,
 }
@@ -2309,12 +2589,10 @@ def available_model_names(tab):
 
 def populate_tab_from_request(tab):
     if tab.get("allow_model_comparison"):
-        selected_models = request.form.getlist(tab["model_field"]) or [tab["default_model"]]
+        selected_models = request.form.getlist(tab["model_field"])
         allowed_models = available_model_names(tab)
         tab["selected_models"] = [model for model in selected_models if model in allowed_models]
-        if not tab["selected_models"]:
-            tab["selected_models"] = [tab["default_model"]]
-        tab["selected_model"] = tab["selected_models"][0]
+        tab["selected_model"] = tab["selected_models"][0] if tab["selected_models"] else tab["default_model"]
         selected_detail_model = request.form.get(tab.get("detail_model_field", ""), "best")
         tab["selected_detail_model"] = selected_detail_model if selected_detail_model == "best" or selected_detail_model in allowed_models else "best"
     else:
@@ -2487,6 +2765,12 @@ def regression_tuning_grid(model_name, estimator):
     if model_name == "huber":
         prefix = estimator_step_name(estimator, HuberRegressor)
         return {f"{prefix}epsilon": [1.1, 1.35, 1.75], f"{prefix}alpha": [0.0001, 0.001, 0.01]}
+    if model_name == "bayesian_ridge":
+        prefix = estimator_step_name(estimator, BayesianRidge)
+        return {f"{prefix}alpha_1": [1e-7, 1e-6, 1e-5], f"{prefix}lambda_1": [1e-7, 1e-6, 1e-5]}
+    if model_name == "quantile":
+        prefix = estimator_step_name(estimator, QuantileRegressor)
+        return {f"{prefix}alpha": [0.0, 0.0001, 0.001], f"{prefix}quantile": [0.25, 0.5, 0.75]}
     if model_name == "random_forest":
         return {"n_estimators": [100, 200], "max_depth": [None, 6, 10], "min_samples_leaf": [1, 5]}
     if model_name == "extra_trees":
@@ -2502,6 +2786,25 @@ def regression_tuning_grid(model_name, estimator):
             "num_leaves": [15, 31, 63],
             "min_child_samples": [10, 20, 40],
         }
+    if model_name == "xgboost":
+        if XGBRegressor is None:
+            return {}
+        return {
+            "n_estimators": [100, 200],
+            "learning_rate": [0.03, 0.05, 0.1],
+            "max_depth": [3, 4, 6],
+            "subsample": [0.8, 1.0],
+        }
+    if model_name == "catboost":
+        if CatBoostRegressor is None:
+            return {}
+        return {
+            "iterations": [100, 200],
+            "learning_rate": [0.03, 0.05, 0.1],
+            "depth": [4, 6, 8],
+        }
+    if model_name == "stacking":
+        return {"final_estimator__alpha": [0.1, 1.0, 10.0], "passthrough": [False, True]}
     if model_name == "svr":
         prefix = estimator_step_name(estimator, SVR)
         return {f"{prefix}C": [0.5, 1.0, 2.0], f"{prefix}epsilon": [0.05, 0.1, 0.2], f"{prefix}gamma": ["scale", "auto"]}
@@ -3503,6 +3806,8 @@ def fit_failure_summary(rows):
 
 def handle_classification_comparison_submission(tab, dataset):
     options = preprocessing_options(tab)
+    progress_job_id = active_run_progress_id()
+    initialize_run_progress(progress_job_id, len(tab["selected_models"]))
     successful_outputs = []
     tuned_results = {}
     rows = []
@@ -3587,9 +3892,12 @@ def handle_classification_comparison_submission(tab, dataset):
                     "_model_name": model_name,
                 }
             )
+        finally:
+            advance_run_progress(progress_job_id, model_label)
 
     if not rows:
         tab["error"] = "Select at least one model."
+        complete_run_progress(progress_job_id)
         return
 
     best_model_name = None
@@ -3867,6 +4175,7 @@ def restore_pro_runs(model_tabs, exclude=None):
 
 def handle_classification_submission(tab, dataset):
     populate_tab_from_request(tab)
+    progress_job_id = active_run_progress_id()
 
     if dataset is None:
         tab["error"] = "Upload a dataset on the Data tab before running classification."
@@ -3875,6 +4184,7 @@ def handle_classification_submission(tab, dataset):
     elif tab.get("allow_model_comparison"):
         handle_classification_comparison_submission(tab, dataset)
     else:
+        initialize_run_progress(progress_job_id, 1)
         try:
             fit_model = CLASSIFICATION_MODEL_FITTERS.get(tab["selected_model"], fit_logistic_regression)
             output = fit_model(
@@ -3887,25 +4197,34 @@ def handle_classification_submission(tab, dataset):
             tab["output"] = register_downloads(tab["form_name"], output)
         except Exception as exc:
             tab["error"] = str(exc)
+        finally:
+            advance_run_progress(progress_job_id, tab.get("selected_model", tab["default_model"]))
 
 
 REGRESSION_MODEL_LABELS = {
-    "linear": "Linear Regression",
-    "ridge": "Ridge Regression",
-    "lasso": "Lasso Regression",
+    "bayesian_ridge": "Bayesian Ridge Regression",
+    "catboost": "CatBoost Regression",
     "elastic_net": "Elastic Net Regression",
-    "huber": "Huber Regression",
-    "random_forest": "Random Forest Regression",
     "extra_trees": "Extra Trees Regression",
     "gradient_boosting": "Gradient Boosting Regression",
-    "lightgbm": "LightGBM Regression",
-    "svr": "Support Vector Regression",
+    "huber": "Huber Regression",
     "knn": "kNN Regression",
+    "linear": "Linear Regression",
+    "lasso": "Lasso Regression",
+    "lightgbm": "LightGBM Regression",
+    "quantile": "Quantile Regression",
+    "random_forest": "Random Forest Regression",
+    "ridge": "Ridge Regression",
+    "stacking": "Stacking Regressor",
+    "svr": "Support Vector Regression",
+    "xgboost": "XGBoost Regression",
 }
 
 
 def handle_regression_comparison_submission(tab, dataset):
     options = preprocessing_options(tab)
+    progress_job_id = active_run_progress_id()
+    initialize_run_progress(progress_job_id, len(tab["selected_models"]))
     successful_outputs = []
     tuned_results = {}
     rows = []
@@ -3992,9 +4311,12 @@ def handle_regression_comparison_submission(tab, dataset):
                     "_model_name": model_name,
                 }
             )
+        finally:
+            advance_run_progress(progress_job_id, model_label)
 
     if not rows:
         tab["error"] = "Select at least one model."
+        complete_run_progress(progress_job_id)
         return
 
     if successful_outputs:
@@ -4047,6 +4369,7 @@ def handle_regression_comparison_submission(tab, dataset):
 
 def handle_regression_submission(tab, dataset):
     populate_tab_from_request(tab)
+    progress_job_id = active_run_progress_id()
 
     if dataset is None:
         tab["error"] = "Upload a dataset on the Data tab before running regression."
@@ -4055,6 +4378,7 @@ def handle_regression_submission(tab, dataset):
     elif tab.get("allow_model_comparison"):
         handle_regression_comparison_submission(tab, dataset)
     else:
+        initialize_run_progress(progress_job_id, 1)
         try:
             fit_model = REGRESSION_MODEL_FITTERS.get(tab["selected_model"], fit_linear_regression)
             output = fit_model(
@@ -4067,6 +4391,8 @@ def handle_regression_submission(tab, dataset):
             tab["output"] = register_downloads(tab["form_name"], output)
         except Exception as exc:
             tab["error"] = str(exc)
+        finally:
+            advance_run_progress(progress_job_id, tab.get("selected_model", tab["default_model"]))
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -4189,6 +4515,20 @@ def index():
         pro_classification_tab=model_tabs["pro_classification"],
         pro_regression_tab=model_tabs["pro_regression"],
     )
+
+
+@app.route("/run-progress/<job_id>")
+def run_progress(job_id):
+    if not is_user_authenticated():
+        return jsonify({"status": "unauthorized", "completed": 0, "total": 0, "percent": 0}), 401
+    cleanup_run_progress()
+    with RUN_PROGRESS_LOCK:
+        progress = deepcopy(RUN_PROGRESS.get(job_id))
+    if progress is None:
+        progress = {"completed": 0, "total": 0, "percent": 0, "status": "pending", "label": ""}
+    progress.pop("updated_at", None)
+    return jsonify(progress)
+
 
 @app.route("/logout")
 def logout():

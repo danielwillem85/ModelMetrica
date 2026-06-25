@@ -7,3 +7,5 @@ matplotlib
 python-dotenv
 certifi
 lightgbm
+xgboost
+catboost
