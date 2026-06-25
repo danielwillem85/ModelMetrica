@@ -4,6 +4,8 @@ const processingOverlay = document.getElementById("processing-overlay");
 const processingProgress = document.getElementById("processing-progress");
 const processingProgressFill = document.getElementById("processing-progress-fill");
 const processingProgressText = document.getElementById("processing-progress-text");
+const processingModelListWrap = document.getElementById("processing-model-list-wrap");
+const processingModelList = document.getElementById("processing-model-list");
 const modelSelectionOverlay = document.getElementById("model-selection-overlay");
 const subscriptionOverlay = document.getElementById("subscription-overlay");
 const accountSubscriptionOverlay = document.getElementById("account-subscription-overlay");
@@ -29,13 +31,14 @@ function stopProcessingProgressPolling() {
 }
 
 function resetProcessingProgress(totalModels) {
-  updateProcessingProgress(0, 0, totalModels);
+  updateProcessingProgress(0, 0, totalModels, []);
 }
 
-function updateProcessingProgress(percent, completed, total, label = "") {
+function updateProcessingProgress(percent, completed, total, labels = []) {
   const safeTotal = Math.max(Number(total) || 0, 0);
   const safeCompleted = Math.max(Number(completed) || 0, 0);
   const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  const fittedLabels = Array.isArray(labels) ? labels.filter(Boolean) : [];
   if (processingProgressFill) {
     processingProgressFill.style.width = `${safePercent}%`;
   }
@@ -45,8 +48,16 @@ function updateProcessingProgress(percent, completed, total, label = "") {
   if (processingProgressText) {
     const totalText = safeTotal || 1;
     const completedText = Math.min(safeCompleted, totalText);
-    const suffix = label ? ` Last fitted: ${label}.` : "";
-    processingProgressText.textContent = `${completedText} of ${totalText} model(s) fitted.${suffix}`;
+    processingProgressText.textContent = `${completedText} of ${totalText} model(s) estimated.`;
+  }
+  if (processingModelList && processingModelListWrap) {
+    processingModelList.replaceChildren();
+    fittedLabels.forEach((label) => {
+      const item = document.createElement("li");
+      item.textContent = label;
+      processingModelList.appendChild(item);
+    });
+    processingModelListWrap.hidden = fittedLabels.length === 0;
   }
 }
 
@@ -65,7 +76,7 @@ function startProcessingProgressPolling(jobId, fallbackTotal) {
         const total = progress.total || fallbackTotal;
         const completed = progress.completed || 0;
         const percent = progress.percent || (total ? (completed / total) * 100 : 0);
-        updateProcessingProgress(percent, completed, total, progress.label || "");
+        updateProcessingProgress(percent, completed, total, progress.labels || []);
         if (progress.status === "complete") {
           stopProcessingProgressPolling();
         }

@@ -130,6 +130,7 @@ def initialize_run_progress(job_id, total):
             "percent": 0,
             "status": "running",
             "label": "",
+            "labels": [],
             "updated_at": time.time(),
         }
 
@@ -145,6 +146,8 @@ def advance_run_progress(job_id, label=""):
         completed = min(progress.get("completed", 0) + 1, total) if total else progress.get("completed", 0) + 1
         progress["completed"] = completed
         progress["label"] = label
+        if label:
+            progress.setdefault("labels", []).append(label)
         progress["percent"] = int((completed / total) * 100) if total else 100
         progress["status"] = "complete" if total and completed >= total else "running"
         progress["updated_at"] = time.time()

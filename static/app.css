@@ -730,6 +730,35 @@ tr:nth-child(even) td {
   font-size: 13px;
   font-weight: 750;
 }
+.processing-model-list-wrap {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 14px;
+  text-align: left;
+}
+.processing-model-list-wrap h3 {
+  color: var(--ink);
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+.processing-model-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 0;
+}
+.processing-model-list li {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  padding: 7px 9px;
+}
 @media (max-width: 760px) {
   .model-form {
     grid-template-columns: 1fr;
