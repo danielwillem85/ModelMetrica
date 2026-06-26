@@ -29,13 +29,6 @@
                         <input form="{{ tab.id }}_compare_form" type="checkbox" name="compare_run_ids" value="{{ run.run_id }}" data-run-compare-checkbox="{{ tab.id }}_compare_form" {{ 'checked' if run.is_compare_selected else '' }}>
                       </td>
                       <td class="history-actions-cell">
-                        <form id="{{ tab.id }}_notes_{{ run.run_id }}" class="inline-form history-button-stack" method="post" action="/">
-                          <input type="hidden" name="form_name" value="update_pro_run_notes">
-                          <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
-                          <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
-                          <input type="hidden" name="run_id" value="{{ run.run_id }}">
-                          <button class="small-action secondary-action" type="submit">Save notes</button>
-                        </form>
                         {% if run.is_selected %}
                           <span class="loaded-run">Loaded</span>
                         {% else %}
@@ -52,7 +45,14 @@
                         <input form="{{ tab.id }}_notes_{{ run.run_id }}" class="history-input" name="run_name" type="text" maxlength="120" value="{{ run.run_name }}">
                       </td>
                       <td class="history-notes-cell">
-                        <textarea form="{{ tab.id }}_notes_{{ run.run_id }}" class="history-notes" name="run_notes" maxlength="2000" rows="2">{{ run.run_notes }}</textarea>
+                        <form id="{{ tab.id }}_notes_{{ run.run_id }}" class="inline-form history-notes-form" method="post" action="/">
+                          <input type="hidden" name="form_name" value="update_pro_run_notes">
+                          <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
+                          <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
+                          <input type="hidden" name="run_id" value="{{ run.run_id }}">
+                          <textarea class="history-notes" name="run_notes" maxlength="2000" rows="2">{{ run.run_notes }}</textarea>
+                          <button class="small-action secondary-action history-save-button" type="submit">Save note</button>
+                        </form>
                       </td>
                       <td class="history-time-cell">{{ run.timestamp }}</td>
                       <td>{{ run.target }}</td>

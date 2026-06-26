@@ -500,6 +500,12 @@ button:hover {
   min-width: 0;
   resize: vertical;
 }
+.history-notes-form {
+  gap: 7px;
+}
+.history-save-button {
+  justify-self: start;
+}
 .history-button-stack {
   margin-bottom: 7px;
 }
