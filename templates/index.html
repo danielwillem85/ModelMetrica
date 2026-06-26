@@ -462,21 +462,28 @@
                   <button type="button" class="small-action secondary-action" data-model-deselect-all>Deselect all</button>
                 </div>
                 <div id="{{ tab.model_field }}" class="model-choice-grid" role="group" aria-labelledby="{{ tab.model_field }}_label">
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="bagging" {{ 'checked' if 'bagging' in tab.selected_models else '' }}> Bagging Regressor</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="bayesian_ridge" {{ 'checked' if 'bayesian_ridge' in tab.selected_models else '' }}> Bayesian Ridge Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="catboost" {{ 'checked' if 'catboost' in tab.selected_models else '' }}> CatBoost Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="elastic_net" {{ 'checked' if 'elastic_net' in tab.selected_models else '' }}> Elastic Net Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="extra_trees" {{ 'checked' if 'extra_trees' in tab.selected_models else '' }}> Extra Trees Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="gradient_boosting" {{ 'checked' if 'gradient_boosting' in tab.selected_models else '' }}> Gradient Boosting Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="huber" {{ 'checked' if 'huber' in tab.selected_models else '' }}> Huber Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="kernel_ridge" {{ 'checked' if 'kernel_ridge' in tab.selected_models else '' }}> Kernel Ridge Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="knn" {{ 'checked' if 'knn' in tab.selected_models else '' }}> kNN Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="lasso" {{ 'checked' if 'lasso' in tab.selected_models else '' }}> Lasso Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="lightgbm" {{ 'checked' if 'lightgbm' in tab.selected_models else '' }}> LightGBM Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="linear" {{ 'checked' if 'linear' in tab.selected_models else '' }}> Linear Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="passive_aggressive" {{ 'checked' if 'passive_aggressive' in tab.selected_models else '' }}> Passive Aggressive Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="pls" {{ 'checked' if 'pls' in tab.selected_models else '' }}> PLS Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="poisson" {{ 'checked' if 'poisson' in tab.selected_models else '' }}> Poisson Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="quantile" {{ 'checked' if 'quantile' in tab.selected_models else '' }}> Quantile Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="random_forest" {{ 'checked' if 'random_forest' in tab.selected_models else '' }}> Random Forest Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="ridge" {{ 'checked' if 'ridge' in tab.selected_models else '' }}> Ridge Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="stacking" {{ 'checked' if 'stacking' in tab.selected_models else '' }}> Stacking Regressor</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="svr" {{ 'checked' if 'svr' in tab.selected_models else '' }}> Support Vector Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="tweedie" {{ 'checked' if 'tweedie' in tab.selected_models else '' }}> Tweedie Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="voting" {{ 'checked' if 'voting' in tab.selected_models else '' }}> Voting Regressor</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="xgboost" {{ 'checked' if 'xgboost' in tab.selected_models else '' }}> XGBoost Regression</label>
                 </div>
                 {% else %}
@@ -496,21 +503,28 @@
                 <label for="{{ tab.detail_model_field }}">Detail model</label>
                 <select id="{{ tab.detail_model_field }}" name="{{ tab.detail_model_field }}" required>
                   <option value="best" {{ 'selected' if tab.selected_detail_model == 'best' else '' }}>Auto best</option>
+                  <option value="bagging" {{ 'selected' if tab.selected_detail_model == 'bagging' else '' }}>Bagging Regressor</option>
                   <option value="bayesian_ridge" {{ 'selected' if tab.selected_detail_model == 'bayesian_ridge' else '' }}>Bayesian Ridge Regression</option>
                   <option value="catboost" {{ 'selected' if tab.selected_detail_model == 'catboost' else '' }}>CatBoost Regression</option>
                   <option value="elastic_net" {{ 'selected' if tab.selected_detail_model == 'elastic_net' else '' }}>Elastic Net Regression</option>
                   <option value="extra_trees" {{ 'selected' if tab.selected_detail_model == 'extra_trees' else '' }}>Extra Trees Regression</option>
                   <option value="gradient_boosting" {{ 'selected' if tab.selected_detail_model == 'gradient_boosting' else '' }}>Gradient Boosting Regression</option>
                   <option value="huber" {{ 'selected' if tab.selected_detail_model == 'huber' else '' }}>Huber Regression</option>
+                  <option value="kernel_ridge" {{ 'selected' if tab.selected_detail_model == 'kernel_ridge' else '' }}>Kernel Ridge Regression</option>
                   <option value="knn" {{ 'selected' if tab.selected_detail_model == 'knn' else '' }}>kNN Regression</option>
                   <option value="lasso" {{ 'selected' if tab.selected_detail_model == 'lasso' else '' }}>Lasso Regression</option>
                   <option value="lightgbm" {{ 'selected' if tab.selected_detail_model == 'lightgbm' else '' }}>LightGBM Regression</option>
                   <option value="linear" {{ 'selected' if tab.selected_detail_model == 'linear' else '' }}>Linear Regression</option>
+                  <option value="passive_aggressive" {{ 'selected' if tab.selected_detail_model == 'passive_aggressive' else '' }}>Passive Aggressive Regression</option>
+                  <option value="pls" {{ 'selected' if tab.selected_detail_model == 'pls' else '' }}>PLS Regression</option>
+                  <option value="poisson" {{ 'selected' if tab.selected_detail_model == 'poisson' else '' }}>Poisson Regression</option>
                   <option value="quantile" {{ 'selected' if tab.selected_detail_model == 'quantile' else '' }}>Quantile Regression</option>
                   <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest Regression</option>
                   <option value="ridge" {{ 'selected' if tab.selected_detail_model == 'ridge' else '' }}>Ridge Regression</option>
                   <option value="stacking" {{ 'selected' if tab.selected_detail_model == 'stacking' else '' }}>Stacking Regressor</option>
                   <option value="svr" {{ 'selected' if tab.selected_detail_model == 'svr' else '' }}>Support Vector Regression</option>
+                  <option value="tweedie" {{ 'selected' if tab.selected_detail_model == 'tweedie' else '' }}>Tweedie Regression</option>
+                  <option value="voting" {{ 'selected' if tab.selected_detail_model == 'voting' else '' }}>Voting Regressor</option>
                   <option value="xgboost" {{ 'selected' if tab.selected_detail_model == 'xgboost' else '' }}>XGBoost Regression</option>
                 </select>
               </div>

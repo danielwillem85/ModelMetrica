@@ -23,6 +23,7 @@ from sklearn.calibration import CalibratedClassifierCV
 from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 from sklearn.ensemble import (
     AdaBoostClassifier,
+    BaggingRegressor,
     ExtraTreesRegressor,
     ExtraTreesClassifier,
     GradientBoostingClassifier,
@@ -33,12 +34,15 @@ from sklearn.ensemble import (
     StackingClassifier,
     StackingRegressor,
     VotingClassifier,
+    VotingRegressor,
 )
+from sklearn.cross_decomposition import PLSRegression
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
 from sklearn.dummy import DummyClassifier
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.inspection import permutation_importance
-from sklearn.linear_model import BayesianRidge, ElasticNet, HuberRegressor, Lasso, LinearRegression, LogisticRegression, QuantileRegressor, Ridge, RidgeClassifier, SGDClassifier
+from sklearn.kernel_ridge import KernelRidge
+from sklearn.linear_model import BayesianRidge, ElasticNet, HuberRegressor, Lasso, LinearRegression, LogisticRegression, PoissonRegressor, QuantileRegressor, Ridge, RidgeClassifier, SGDClassifier, SGDRegressor, TweedieRegressor
 from sklearn.metrics import accuracy_score, average_precision_score, auc, precision_recall_curve, roc_curve
 from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.naive_bayes import GaussianNB
@@ -47,7 +51,7 @@ from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC, SVC, SVR
-from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor, plot_tree
 
 from auth import (
     authenticate_user,
@@ -918,6 +922,45 @@ def regression_estimator(model_name, options=None):
             solver="highs",
         )
         return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+    if model_name == "passive_aggressive":
+        model = SGDRegressor(
+            loss="epsilon_insensitive",
+            penalty=None,
+            learning_rate="pa1",
+            eta0=tuned_float(options, "passive_aggressive", "eta0", 1.0),
+            epsilon=tuned_float(options, "passive_aggressive", "epsilon", 0.1),
+            max_iter=1000,
+            random_state=preprocessing_seed(options),
+            tol=1e-3,
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+    if model_name == "kernel_ridge":
+        model = KernelRidge(
+            alpha=tuned_float(options, "kernel_ridge", "alpha", 1.0),
+            kernel=tuned_param(options, "kernel_ridge", "kernel", "rbf"),
+            gamma=tuned_param(options, "kernel_ridge", "gamma", None),
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+    if model_name == "pls":
+        model = PLSRegression(
+            n_components=tuned_int(options, "pls", "n_components", 1),
+            scale=False,
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+    if model_name == "tweedie":
+        model = TweedieRegressor(
+            power=tuned_float(options, "tweedie", "power", 1.5),
+            alpha=tuned_float(options, "tweedie", "alpha", 0.1),
+            link=tuned_param(options, "tweedie", "link", "auto"),
+            max_iter=1000,
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+    if model_name == "poisson":
+        model = PoissonRegressor(
+            alpha=tuned_float(options, "poisson", "alpha", 0.1),
+            max_iter=1000,
+        )
+        return make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
     if model_name == "random_forest":
         return RandomForestRegressor(
             n_estimators=tuned_int(options, "random_forest", "n_estimators", 200),
@@ -978,6 +1021,31 @@ def regression_estimator(model_name, options=None):
             loss_function="RMSE",
             random_seed=preprocessing_seed(options),
             verbose=False,
+        )
+    if model_name == "bagging":
+        return BaggingRegressor(
+            estimator=DecisionTreeRegressor(
+                max_depth=tuned_param(options, "bagging", "max_depth", None),
+                min_samples_leaf=tuned_int(options, "bagging", "min_samples_leaf", 1),
+                random_state=preprocessing_seed(options),
+            ),
+            n_estimators=tuned_int(options, "bagging", "n_estimators", 100),
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+        )
+    if model_name == "voting":
+        ridge_base = make_pipeline(StandardScaler(), Ridge(alpha=1.0)) if scaling_enabled(options) else Ridge(alpha=1.0)
+        svr_base = make_pipeline(StandardScaler(), SVR(C=1.0, epsilon=0.1))
+        base_estimators = [
+            ("ridge", ridge_base),
+            ("random_forest", RandomForestRegressor(n_estimators=100, max_depth=8, random_state=preprocessing_seed(options), n_jobs=-1)),
+            ("gradient_boosting", GradientBoostingRegressor(n_estimators=100, learning_rate=0.05, max_depth=3, random_state=preprocessing_seed(options))),
+            ("svr", svr_base),
+        ]
+        return VotingRegressor(
+            estimators=base_estimators,
+            weights=tuned_param(options, "voting", "weights", None),
+            n_jobs=-1,
         )
     if model_name == "stacking":
         ridge_base = make_pipeline(StandardScaler(), Ridge(alpha=1.0)) if scaling_enabled(options) else Ridge(alpha=1.0)
@@ -2461,7 +2529,7 @@ def fit_generic_regression_model(data, target, predictors, test_size, cv_folds, 
     split = split_regression_data(y, x_encoded, test_size, options)
     estimator = regression_estimator(model_name, options)
     estimator.fit(split["x_train"], split["y_train"])
-    predictions = estimator.predict(split["x_test"])
+    predictions = np.ravel(estimator.predict(split["x_test"]))
 
     metrics = [
         {"label": "Train rows", "value": len(split["x_train"])},
@@ -2531,6 +2599,76 @@ def fit_quantile_regression(data, target, predictors, test_size, cv_folds, optio
     )
 
 
+def fit_passive_aggressive_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "passive_aggressive",
+        "Passive Aggressive Regression",
+        "Fast linear regression for larger datasets; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_kernel_ridge_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "kernel_ridge",
+        "Kernel Ridge Regression",
+        "Regularized nonlinear regression using kernel features; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_pls_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "pls",
+        "PLS Regression",
+        "Latent-component regression for correlated predictors; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_tweedie_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "tweedie",
+        "Tweedie Regression",
+        "Generalized linear regression for skewed positive targets; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_poisson_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "poisson",
+        "Poisson Regression",
+        "Generalized linear regression for nonnegative count-like targets; test-set metrics are shown.",
+        options,
+    )
+
+
 def fit_xgboost_regression(data, target, predictors, test_size, cv_folds, options=None):
     return fit_generic_regression_model(
         data,
@@ -2555,6 +2693,34 @@ def fit_catboost_regression(data, target, predictors, test_size, cv_folds, optio
         "catboost",
         "CatBoost Regression",
         "Ordered boosted-tree regression using CatBoost; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_bagging_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "bagging",
+        "Bagging Regressor",
+        "Bootstrap ensemble regression that stabilizes tree predictions; test-set metrics are shown.",
+        options,
+    )
+
+
+def fit_voting_regression(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_regression_model(
+        data,
+        target,
+        predictors,
+        test_size,
+        cv_folds,
+        "voting",
+        "Voting Regressor",
+        "Averaged ensemble regression across several base models; test-set metrics are shown.",
         options,
     )
 
@@ -2608,12 +2774,19 @@ REGRESSION_MODEL_FITTERS = {
     "huber": fit_huber_regression,
     "bayesian_ridge": fit_bayesian_ridge_regression,
     "quantile": fit_quantile_regression,
+    "passive_aggressive": fit_passive_aggressive_regression,
+    "kernel_ridge": fit_kernel_ridge_regression,
+    "pls": fit_pls_regression,
+    "tweedie": fit_tweedie_regression,
+    "poisson": fit_poisson_regression,
     "random_forest": fit_random_forest_regression,
     "extra_trees": fit_extra_trees_regression,
     "gradient_boosting": fit_gradient_boosting_regression,
     "lightgbm": fit_lightgbm_regression,
     "xgboost": fit_xgboost_regression,
     "catboost": fit_catboost_regression,
+    "bagging": fit_bagging_regression,
+    "voting": fit_voting_regression,
     "stacking": fit_stacking_regression,
     "svr": fit_svr_regression,
     "knn": fit_knn_regression,
@@ -2982,6 +3155,21 @@ def regression_tuning_grid(model_name, estimator):
     if model_name == "quantile":
         prefix = estimator_step_name(estimator, QuantileRegressor)
         return {f"{prefix}alpha": [0.0, 0.0001, 0.001], f"{prefix}quantile": [0.25, 0.5, 0.75]}
+    if model_name == "passive_aggressive":
+        prefix = estimator_step_name(estimator, SGDRegressor)
+        return {f"{prefix}eta0": [0.1, 1.0, 10.0], f"{prefix}epsilon": [0.05, 0.1, 0.2]}
+    if model_name == "kernel_ridge":
+        prefix = estimator_step_name(estimator, KernelRidge)
+        return {f"{prefix}alpha": [0.1, 1.0, 10.0], f"{prefix}kernel": ["rbf", "linear"], f"{prefix}gamma": [0.01, 0.1, 1.0]}
+    if model_name == "pls":
+        prefix = estimator_step_name(estimator, PLSRegression)
+        return {f"{prefix}n_components": [1, 2, 3]}
+    if model_name == "tweedie":
+        prefix = estimator_step_name(estimator, TweedieRegressor)
+        return {f"{prefix}power": [0.0, 1.0, 1.5], f"{prefix}alpha": [0.01, 0.1, 1.0]}
+    if model_name == "poisson":
+        prefix = estimator_step_name(estimator, PoissonRegressor)
+        return {f"{prefix}alpha": [0.01, 0.1, 1.0]}
     if model_name == "random_forest":
         return {"n_estimators": [100, 200], "max_depth": [None, 6, 10], "min_samples_leaf": [1, 5]}
     if model_name == "extra_trees":
@@ -3014,6 +3202,14 @@ def regression_tuning_grid(model_name, estimator):
             "learning_rate": [0.03, 0.05, 0.1],
             "depth": [4, 6, 8],
         }
+    if model_name == "bagging":
+        return {
+            "n_estimators": [50, 100, 200],
+            "estimator__max_depth": [None, 4, 8],
+            "estimator__min_samples_leaf": [1, 5],
+        }
+    if model_name == "voting":
+        return {"weights": [None, [2, 1, 1, 1], [1, 2, 2, 1]]}
     if model_name == "stacking":
         return {"final_estimator__alpha": [0.1, 1.0, 10.0], "passthrough": [False, True]}
     if model_name == "svr":
@@ -3090,7 +3286,7 @@ def tune_regression_model(model_name, data, target, predictors, test_size, cv_fo
     cv = KFold(n_splits=actual_folds, shuffle=True, random_state=preprocessing_seed(options))
     search = search_cv_for_mode(estimator, param_grid, mode, iterations, "neg_root_mean_squared_error", cv, preprocessing_seed(options))
     search.fit(split["x_train"], split["y_train"])
-    predictions = search.best_estimator_.predict(split["x_test"])
+    predictions = np.ravel(search.best_estimator_.predict(split["x_test"]))
     rmse = math.sqrt(float(np.mean((split["y_test"] - predictions) ** 2)))
     return {
         "test_rmse": rmse,
@@ -3543,7 +3739,7 @@ def add_regression_analytics(output, data, target, predictors, model_name, test_
         split = split_regression_data(y, x_encoded, test_size, options)
         estimator = regression_estimator(model_name, options)
         estimator.fit(split["x_train"], split["y_train"])
-        predictions = estimator.predict(split["x_test"])
+        predictions = np.ravel(estimator.predict(split["x_test"]))
         residuals = split["y_test"] - predictions
         diagnostics = pd.DataFrame(
             {
@@ -4467,21 +4663,28 @@ def handle_classification_submission(tab, dataset):
 
 
 REGRESSION_MODEL_LABELS = {
+    "bagging": "Bagging Regressor",
     "bayesian_ridge": "Bayesian Ridge Regression",
     "catboost": "CatBoost Regression",
     "elastic_net": "Elastic Net Regression",
     "extra_trees": "Extra Trees Regression",
     "gradient_boosting": "Gradient Boosting Regression",
     "huber": "Huber Regression",
+    "kernel_ridge": "Kernel Ridge Regression",
     "knn": "kNN Regression",
     "linear": "Linear Regression",
     "lasso": "Lasso Regression",
     "lightgbm": "LightGBM Regression",
+    "passive_aggressive": "Passive Aggressive Regression",
+    "pls": "PLS Regression",
+    "poisson": "Poisson Regression",
     "quantile": "Quantile Regression",
     "random_forest": "Random Forest Regression",
     "ridge": "Ridge Regression",
     "stacking": "Stacking Regressor",
     "svr": "Support Vector Regression",
+    "tweedie": "Tweedie Regression",
+    "voting": "Voting Regressor",
     "xgboost": "XGBoost Regression",
 }
 
