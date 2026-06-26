@@ -10,8 +10,14 @@
               <div class="form-field model-type-field">
                 <label id="{{ tab.model_field }}_label" for="{{ tab.model_field }}">Model type</label>
                 {% if tab.allow_model_comparison %}
+                <div class="model-choice-actions" aria-label="Model type selection actions">
+                  <button type="button" class="small-action secondary-action" data-model-select-all>Select all</button>
+                  <button type="button" class="small-action secondary-action" data-model-deselect-all>Deselect all</button>
+                </div>
                 <div id="{{ tab.model_field }}" class="model-choice-grid" role="group" aria-labelledby="{{ tab.model_field }}_label">
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="adaboost" {{ 'checked' if 'adaboost' in tab.selected_models else '' }}> AdaBoost</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="catboost" {{ 'checked' if 'catboost' in tab.selected_models else '' }}> CatBoost</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="dummy" {{ 'checked' if 'dummy' in tab.selected_models else '' }}> Dummy Classifier</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="elastic_net_logistic" {{ 'checked' if 'elastic_net_logistic' in tab.selected_models else '' }}> Elastic Net Logistic Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="extra_trees" {{ 'checked' if 'extra_trees' in tab.selected_models else '' }}> Extra Trees</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="gaussian_process" {{ 'checked' if 'gaussian_process' in tab.selected_models else '' }}> Gaussian Process</label>
@@ -20,14 +26,19 @@
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="knn" {{ 'checked' if 'knn' in tab.selected_models else '' }}> kNN</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="lightgbm" {{ 'checked' if 'lightgbm' in tab.selected_models else '' }}> LightGBM</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="lda" {{ 'checked' if 'lda' in tab.selected_models else '' }}> Linear Discriminant Analysis</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="linear_svm" {{ 'checked' if 'linear_svm' in tab.selected_models else '' }}> Linear SVM</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="logistic" {{ 'checked' if 'logistic' in tab.selected_models else '' }}> Logistic regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="mlp" {{ 'checked' if 'mlp' in tab.selected_models else '' }}> MLP Neural Network</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="naive_bayes" {{ 'checked' if 'naive_bayes' in tab.selected_models else '' }}> Naive Bayes</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="passive_aggressive" {{ 'checked' if 'passive_aggressive' in tab.selected_models else '' }}> Passive Aggressive</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="qda" {{ 'checked' if 'qda' in tab.selected_models else '' }}> Quadratic Discriminant Analysis</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="random_forest" {{ 'checked' if 'random_forest' in tab.selected_models else '' }}> Random Forest</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="ridge_classifier" {{ 'checked' if 'ridge_classifier' in tab.selected_models else '' }}> Ridge Classifier</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="stacking" {{ 'checked' if 'stacking' in tab.selected_models else '' }}> Stacking Classifier</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="svm" {{ 'checked' if 'svm' in tab.selected_models else '' }}> Support Vector Machine</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="tree" {{ 'checked' if 'tree' in tab.selected_models else '' }}> Tree model</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="voting" {{ 'checked' if 'voting' in tab.selected_models else '' }}> Voting Classifier</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="xgboost" {{ 'checked' if 'xgboost' in tab.selected_models else '' }}> XGBoost</label>
                 </div>
                 {% else %}
                 <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="10"{% endif %} required>
@@ -54,6 +65,8 @@
                 <select id="{{ tab.detail_model_field }}" name="{{ tab.detail_model_field }}" required>
                   <option value="best" {{ 'selected' if tab.selected_detail_model == 'best' else '' }}>Auto best</option>
                   <option value="adaboost" {{ 'selected' if tab.selected_detail_model == 'adaboost' else '' }}>AdaBoost</option>
+                  <option value="catboost" {{ 'selected' if tab.selected_detail_model == 'catboost' else '' }}>CatBoost</option>
+                  <option value="dummy" {{ 'selected' if tab.selected_detail_model == 'dummy' else '' }}>Dummy Classifier</option>
                   <option value="elastic_net_logistic" {{ 'selected' if tab.selected_detail_model == 'elastic_net_logistic' else '' }}>Elastic Net Logistic Regression</option>
                   <option value="extra_trees" {{ 'selected' if tab.selected_detail_model == 'extra_trees' else '' }}>Extra Trees</option>
                   <option value="gaussian_process" {{ 'selected' if tab.selected_detail_model == 'gaussian_process' else '' }}>Gaussian Process</option>
@@ -62,14 +75,19 @@
                   <option value="knn" {{ 'selected' if tab.selected_detail_model == 'knn' else '' }}>kNN</option>
                   <option value="lightgbm" {{ 'selected' if tab.selected_detail_model == 'lightgbm' else '' }}>LightGBM</option>
                   <option value="lda" {{ 'selected' if tab.selected_detail_model == 'lda' else '' }}>Linear Discriminant Analysis</option>
+                  <option value="linear_svm" {{ 'selected' if tab.selected_detail_model == 'linear_svm' else '' }}>Linear SVM</option>
                   <option value="logistic" {{ 'selected' if tab.selected_detail_model == 'logistic' else '' }}>Logistic regression</option>
                   <option value="mlp" {{ 'selected' if tab.selected_detail_model == 'mlp' else '' }}>MLP Neural Network</option>
                   <option value="naive_bayes" {{ 'selected' if tab.selected_detail_model == 'naive_bayes' else '' }}>Naive Bayes</option>
                   <option value="passive_aggressive" {{ 'selected' if tab.selected_detail_model == 'passive_aggressive' else '' }}>Passive Aggressive</option>
                   <option value="qda" {{ 'selected' if tab.selected_detail_model == 'qda' else '' }}>Quadratic Discriminant Analysis</option>
                   <option value="random_forest" {{ 'selected' if tab.selected_detail_model == 'random_forest' else '' }}>Random Forest</option>
+                  <option value="ridge_classifier" {{ 'selected' if tab.selected_detail_model == 'ridge_classifier' else '' }}>Ridge Classifier</option>
+                  <option value="stacking" {{ 'selected' if tab.selected_detail_model == 'stacking' else '' }}>Stacking Classifier</option>
                   <option value="svm" {{ 'selected' if tab.selected_detail_model == 'svm' else '' }}>Support Vector Machine</option>
                   <option value="tree" {{ 'selected' if tab.selected_detail_model == 'tree' else '' }}>Tree model</option>
+                  <option value="voting" {{ 'selected' if tab.selected_detail_model == 'voting' else '' }}>Voting Classifier</option>
+                  <option value="xgboost" {{ 'selected' if tab.selected_detail_model == 'xgboost' else '' }}>XGBoost</option>
                 </select>
               </div>
               {% endif %}
@@ -439,6 +457,10 @@
               <div class="form-field model-type-field">
                 <label id="{{ tab.model_field }}_label" for="{{ tab.model_field }}">Model type</label>
                 {% if tab.allow_model_comparison %}
+                <div class="model-choice-actions" aria-label="Model type selection actions">
+                  <button type="button" class="small-action secondary-action" data-model-select-all>Select all</button>
+                  <button type="button" class="small-action secondary-action" data-model-deselect-all>Deselect all</button>
+                </div>
                 <div id="{{ tab.model_field }}" class="model-choice-grid" role="group" aria-labelledby="{{ tab.model_field }}_label">
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="bayesian_ridge" {{ 'checked' if 'bayesian_ridge' in tab.selected_models else '' }}> Bayesian Ridge Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="catboost" {{ 'checked' if 'catboost' in tab.selected_models else '' }}> CatBoost Regression</label>

@@ -30,12 +30,15 @@ from sklearn.ensemble import (
     HistGradientBoostingClassifier,
     RandomForestClassifier,
     RandomForestRegressor,
+    StackingClassifier,
     StackingRegressor,
+    VotingClassifier,
 )
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
+from sklearn.dummy import DummyClassifier
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.inspection import permutation_importance
-from sklearn.linear_model import BayesianRidge, ElasticNet, HuberRegressor, Lasso, LinearRegression, LogisticRegression, QuantileRegressor, Ridge, SGDClassifier
+from sklearn.linear_model import BayesianRidge, ElasticNet, HuberRegressor, Lasso, LinearRegression, LogisticRegression, QuantileRegressor, Ridge, RidgeClassifier, SGDClassifier
 from sklearn.metrics import accuracy_score, average_precision_score, auc, precision_recall_curve, roc_curve
 from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.naive_bayes import GaussianNB
@@ -43,7 +46,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC, SVR
+from sklearn.svm import LinearSVC, SVC, SVR
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 from auth import (
@@ -67,13 +70,15 @@ except ImportError:
     LGBMRegressor = None
 
 try:
-    from xgboost import XGBRegressor
+    from xgboost import XGBClassifier, XGBRegressor
 except ImportError:
+    XGBClassifier = None
     XGBRegressor = None
 
 try:
-    from catboost import CatBoostRegressor
+    from catboost import CatBoostClassifier, CatBoostRegressor
 except ImportError:
+    CatBoostClassifier = None
     CatBoostRegressor = None
 
 
@@ -713,6 +718,29 @@ def classification_estimator(model_name, options=None):
             l2_regularization=tuned_float(options, "hist_gradient_boosting", "l2_regularization", 0.0),
             random_state=preprocessing_seed(options),
         ), options)
+    if model_name == "xgboost":
+        if XGBClassifier is None:
+            raise RuntimeError("XGBoost is not installed. Run pip install xgboost or install requirements.txt.")
+        return with_probability_calibration(XGBClassifier(
+            n_estimators=tuned_int(options, "xgboost", "n_estimators", 200),
+            learning_rate=tuned_float(options, "xgboost", "learning_rate", 0.05),
+            max_depth=tuned_int(options, "xgboost", "max_depth", 4),
+            subsample=tuned_float(options, "xgboost", "subsample", 0.9),
+            colsample_bytree=tuned_float(options, "xgboost", "colsample_bytree", 0.9),
+            random_state=preprocessing_seed(options),
+            n_jobs=-1,
+            verbosity=0,
+        ), options)
+    if model_name == "catboost":
+        if CatBoostClassifier is None:
+            raise RuntimeError("CatBoost is not installed. Run pip install catboost or install requirements.txt.")
+        return with_probability_calibration(CatBoostClassifier(
+            iterations=tuned_int(options, "catboost", "iterations", 200),
+            learning_rate=tuned_float(options, "catboost", "learning_rate", 0.05),
+            depth=tuned_int(options, "catboost", "depth", 6),
+            random_seed=preprocessing_seed(options),
+            verbose=False,
+        ), options)
     if model_name == "lightgbm":
         if LGBMClassifier is None:
             raise RuntimeError("LightGBM is not installed. Run pip install lightgbm or install requirements.txt.")
@@ -774,6 +802,20 @@ def classification_estimator(model_name, options=None):
         )
         estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
         return with_probability_calibration(estimator, options)
+    if model_name == "ridge_classifier":
+        model = RidgeClassifier(
+            alpha=tuned_float(options, "ridge_classifier", "alpha", 1.0),
+        )
+        estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        return with_probability_calibration(estimator, options)
+    if model_name == "linear_svm":
+        model = LinearSVC(
+            C=tuned_float(options, "linear_svm", "C", 1.0),
+            max_iter=5000,
+            random_state=preprocessing_seed(options),
+        )
+        estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
+        return with_probability_calibration(estimator, options)
     if model_name == "svm":
         model = SVC(
             kernel="rbf",
@@ -784,6 +826,46 @@ def classification_estimator(model_name, options=None):
         )
         estimator = make_pipeline(StandardScaler(), model) if scaling_enabled(options) else model
         return with_probability_calibration(estimator, options)
+    if model_name == "voting":
+        logistic_base = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=preprocessing_seed(options)))
+        knn_base = make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=7, weights="distance"))
+        base_estimators = [
+            ("logistic", logistic_base),
+            ("random_forest", RandomForestClassifier(n_estimators=100, max_depth=8, random_state=preprocessing_seed(options), n_jobs=-1)),
+            ("gradient_boosting", GradientBoostingClassifier(n_estimators=75, learning_rate=0.05, max_depth=3, random_state=preprocessing_seed(options))),
+            ("knn", knn_base),
+        ]
+        return with_probability_calibration(VotingClassifier(
+            estimators=base_estimators,
+            voting=tuned_param(options, "voting", "voting", "soft"),
+            weights=tuned_param(options, "voting", "weights", None),
+            n_jobs=-1,
+        ), options)
+    if model_name == "stacking":
+        logistic_base = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=preprocessing_seed(options)))
+        linear_svm_base = make_pipeline(StandardScaler(), LinearSVC(C=1.0, max_iter=5000, random_state=preprocessing_seed(options)))
+        base_estimators = [
+            ("logistic", logistic_base),
+            ("random_forest", RandomForestClassifier(n_estimators=100, max_depth=8, random_state=preprocessing_seed(options), n_jobs=-1)),
+            ("gradient_boosting", GradientBoostingClassifier(n_estimators=75, learning_rate=0.05, max_depth=3, random_state=preprocessing_seed(options))),
+            ("linear_svm", linear_svm_base),
+        ]
+        return with_probability_calibration(StackingClassifier(
+            estimators=base_estimators,
+            final_estimator=LogisticRegression(
+                C=tuned_float(options, "stacking", "C", 1.0),
+                max_iter=1000,
+                random_state=preprocessing_seed(options),
+            ),
+            passthrough=bool(tuned_param(options, "stacking", "passthrough", False)),
+            cv=3,
+            n_jobs=-1,
+        ), options)
+    if model_name == "dummy":
+        return DummyClassifier(
+            strategy=tuned_param(options, "dummy", "strategy", "most_frequent"),
+            random_state=preprocessing_seed(options),
+        )
     if model_name == "knn":
         model = KNeighborsClassifier(
             n_neighbors=tuned_int(options, "knn", "n_neighbors", 5),
@@ -1655,6 +1737,14 @@ def fit_hist_gradient_boosting_model(data, target, predictors, test_size, cv_fol
     return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "hist_gradient_boosting", "Hist Gradient Boosting", options)
 
 
+def fit_xgboost_classification(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "xgboost", "XGBoost", options)
+
+
+def fit_catboost_classification(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "catboost", "CatBoost", options)
+
+
 def fit_lda_model(data, target, predictors, test_size, cv_folds, options=None):
     return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "lda", "Linear Discriminant Analysis", options)
 
@@ -1673,6 +1763,26 @@ def fit_mlp_model(data, target, predictors, test_size, cv_folds, options=None):
 
 def fit_passive_aggressive_model(data, target, predictors, test_size, cv_folds, options=None):
     return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "passive_aggressive", "Passive Aggressive", options)
+
+
+def fit_ridge_classifier_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "ridge_classifier", "Ridge Classifier", options)
+
+
+def fit_linear_svm_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "linear_svm", "Linear SVM", options)
+
+
+def fit_voting_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "voting", "Voting Classifier", options)
+
+
+def fit_stacking_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "stacking", "Stacking Classifier", options)
+
+
+def fit_dummy_classifier_model(data, target, predictors, test_size, cv_folds, options=None):
+    return fit_generic_classification_model(data, target, predictors, test_size, cv_folds, "dummy", "Dummy Classifier", options)
 
 
 def fit_elastic_net_logistic_regression(data, target, predictors, test_size, cv_folds, options=None):
@@ -2471,6 +2581,8 @@ CLASSIFICATION_MODEL_FITTERS = {
     "gradient_boosting": fit_gradient_boosting_model,
     "adaboost": fit_adaboost_model,
     "hist_gradient_boosting": fit_hist_gradient_boosting_model,
+    "xgboost": fit_xgboost_classification,
+    "catboost": fit_catboost_classification,
     "lightgbm": fit_lightgbm_model,
     "naive_bayes": fit_naive_bayes_model,
     "lda": fit_lda_model,
@@ -2478,6 +2590,11 @@ CLASSIFICATION_MODEL_FITTERS = {
     "gaussian_process": fit_gaussian_process_model,
     "mlp": fit_mlp_model,
     "passive_aggressive": fit_passive_aggressive_model,
+    "ridge_classifier": fit_ridge_classifier_model,
+    "linear_svm": fit_linear_svm_model,
+    "voting": fit_voting_model,
+    "stacking": fit_stacking_model,
+    "dummy": fit_dummy_classifier_model,
     "elastic_net_logistic": fit_elastic_net_logistic_regression,
     "svm": fit_svm_model,
     "knn": fit_knn_model,
@@ -2697,14 +2814,21 @@ CLASSIFICATION_MODEL_LABELS = {
     "extra_trees": "Extra Trees",
     "gradient_boosting": "Gradient Boosting",
     "adaboost": "AdaBoost",
+    "catboost": "CatBoost",
+    "dummy": "Dummy Classifier",
     "hist_gradient_boosting": "Hist Gradient Boosting",
+    "xgboost": "XGBoost",
     "lightgbm": "LightGBM",
     "naive_bayes": "Naive Bayes",
     "lda": "Linear Discriminant Analysis",
+    "linear_svm": "Linear SVM",
     "qda": "Quadratic Discriminant Analysis",
     "gaussian_process": "Gaussian Process",
     "mlp": "MLP Neural Network",
     "passive_aggressive": "Passive Aggressive",
+    "ridge_classifier": "Ridge Classifier",
+    "stacking": "Stacking Classifier",
+    "voting": "Voting Classifier",
     "elastic_net_logistic": "Elastic Net Logistic Regression",
     "svm": "Support Vector Machine",
     "knn": "kNN",
@@ -2762,6 +2886,25 @@ def classification_tuning_grid(model_name, estimator):
             f"{prefix}learning_rate": [0.05, 0.1],
             f"{prefix}max_leaf_nodes": [15, 31],
         }
+    if model_name == "xgboost":
+        if XGBClassifier is None:
+            return {}
+        prefix = estimator_step_name(estimator, XGBClassifier)
+        return {
+            f"{prefix}n_estimators": [100, 200],
+            f"{prefix}learning_rate": [0.03, 0.05, 0.1],
+            f"{prefix}max_depth": [3, 4, 6],
+            f"{prefix}subsample": [0.8, 1.0],
+        }
+    if model_name == "catboost":
+        if CatBoostClassifier is None:
+            return {}
+        prefix = estimator_step_name(estimator, CatBoostClassifier)
+        return {
+            f"{prefix}iterations": [100, 200],
+            f"{prefix}learning_rate": [0.03, 0.05, 0.1],
+            f"{prefix}depth": [4, 6, 8],
+        }
     if model_name == "lightgbm":
         if LGBMClassifier is None:
             return {}
@@ -2794,9 +2937,24 @@ def classification_tuning_grid(model_name, estimator):
     if model_name == "passive_aggressive":
         prefix = estimator_step_name(estimator, SGDClassifier)
         return {f"{prefix}eta0": [0.1, 1.0, 10.0]}
+    if model_name == "ridge_classifier":
+        prefix = estimator_step_name(estimator, RidgeClassifier)
+        return {f"{prefix}alpha": [0.1, 1.0, 10.0]}
+    if model_name == "linear_svm":
+        prefix = estimator_step_name(estimator, LinearSVC)
+        return {f"{prefix}C": [0.1, 1.0, 10.0]}
     if model_name == "svm":
         prefix = estimator_step_name(estimator, SVC)
         return {f"{prefix}C": [0.5, 1.0, 2.0], f"{prefix}gamma": ["scale", "auto"]}
+    if model_name == "voting":
+        prefix = estimator_step_name(estimator, VotingClassifier)
+        return {f"{prefix}voting": ["soft", "hard"]}
+    if model_name == "stacking":
+        prefix = estimator_step_name(estimator, StackingClassifier)
+        return {f"{prefix}final_estimator__C": [0.1, 1.0, 10.0], f"{prefix}passthrough": [False, True]}
+    if model_name == "dummy":
+        prefix = estimator_step_name(estimator, DummyClassifier)
+        return {f"{prefix}strategy": ["most_frequent", "stratified", "prior"]}
     if model_name == "knn":
         prefix = estimator_step_name(estimator, KNeighborsClassifier)
         return {f"{prefix}n_neighbors": [3, 5, 9], f"{prefix}weights": ["uniform", "distance"]}

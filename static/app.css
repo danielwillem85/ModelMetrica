@@ -252,6 +252,20 @@ select[multiple] {
   height: auto;
   min-height: 0;
 }
+.model-choice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.secondary-action {
+  background: #fff;
+  color: var(--accent-dark);
+}
+.secondary-action:hover {
+  background: #eef6ff;
+  border-color: var(--accent);
+}
 .model-choice-grid {
   background: #fbfcfe;
   border: 1px solid var(--line);

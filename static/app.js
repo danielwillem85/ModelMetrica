@@ -245,6 +245,22 @@ function formHasSelectedModel(form) {
   return Array.from(modelSelect.selectedOptions).some((option) => option.value);
 }
 
+function setModelChoiceGrid(button, checked) {
+  const modelField = button.closest(".model-type-field");
+  const modelCheckboxes = modelField ? modelField.querySelectorAll(".model-choice-grid input[type='checkbox']") : [];
+  modelCheckboxes.forEach((checkbox) => {
+    checkbox.checked = checked;
+  });
+}
+
+document.querySelectorAll("[data-model-select-all]").forEach((button) => {
+  button.addEventListener("click", () => setModelChoiceGrid(button, true));
+});
+
+document.querySelectorAll("[data-model-deselect-all]").forEach((button) => {
+  button.addEventListener("click", () => setModelChoiceGrid(button, false));
+});
+
 document.querySelectorAll("[data-close-model-selection]").forEach((button) => {
   button.addEventListener("click", hideModelSelectionOverlay);
 });
