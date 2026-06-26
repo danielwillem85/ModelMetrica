@@ -445,11 +445,11 @@ button:hover {
 }
 .run-history-table th:nth-child(3),
 .run-history-table td:nth-child(3) {
-  width: 16%;
+  width: 14%;
 }
 .run-history-table th:nth-child(4),
 .run-history-table td:nth-child(4) {
-  width: 12%;
+  width: 24%;
 }
 .run-history-table th:nth-child(5),
 .run-history-table td:nth-child(5) {
@@ -461,14 +461,10 @@ button:hover {
 }
 .run-history-table th:nth-child(7),
 .run-history-table td:nth-child(7) {
-  width: 10%;
+  width: 11%;
 }
 .run-history-table th:nth-child(8),
 .run-history-table td:nth-child(8) {
-  width: 11%;
-}
-.run-history-table th:nth-child(9),
-.run-history-table td:nth-child(9) {
   width: 14%;
 }
 .history-compare-cell {
