@@ -9,3 +9,4 @@ certifi
 lightgbm
 xgboost
 catboost
+shap

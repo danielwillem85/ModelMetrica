@@ -253,12 +253,45 @@ function setModelChoiceGrid(button, checked) {
   });
 }
 
+function applyModelPreset(button) {
+  const modelField = button.closest(".model-type-field");
+  const form = button.closest("form");
+  const modelCheckboxes = modelField ? modelField.querySelectorAll(".model-choice-grid input[type='checkbox']") : [];
+  const presetModels = new Set(
+    (button.dataset.modelPreset || "")
+      .split(",")
+      .map((model) => model.trim())
+      .filter(Boolean)
+  );
+  modelCheckboxes.forEach((checkbox) => {
+    checkbox.checked = presetModels.has(checkbox.value);
+  });
+  const detailModel = form ? form.querySelector("select[name$='_detail_model']") : null;
+  if (detailModel) {
+    detailModel.value = "best";
+  }
+}
+
+document.querySelectorAll("[data-model-preset]").forEach((button) => {
+  button.addEventListener("click", () => applyModelPreset(button));
+});
+
 document.querySelectorAll("[data-model-select-all]").forEach((button) => {
   button.addEventListener("click", () => setModelChoiceGrid(button, true));
 });
 
 document.querySelectorAll("[data-model-deselect-all]").forEach((button) => {
   button.addEventListener("click", () => setModelChoiceGrid(button, false));
+});
+
+document.querySelectorAll("[data-run-compare-checkbox]").forEach((checkbox) => {
+  checkbox.addEventListener("change", () => {
+    const formId = checkbox.dataset.runCompareCheckbox;
+    const selected = Array.from(document.querySelectorAll(`[data-run-compare-checkbox="${formId}"]`)).filter((item) => item.checked);
+    if (selected.length > 2) {
+      checkbox.checked = false;
+    }
+  });
 });
 
 document.querySelectorAll("[data-close-model-selection]").forEach((button) => {

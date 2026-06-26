@@ -85,6 +85,11 @@ except ImportError:
     CatBoostClassifier = None
     CatBoostRegressor = None
 
+try:
+    import shap
+except ImportError:
+    shap = None
+
 
 try:
     from dotenv import load_dotenv
@@ -292,6 +297,7 @@ def save_dataset(data, filename):
     DATASETS[current_id] = {"data": data, "filename": filename}
     session["dataset_id"] = current_id
     session["selected_pro_run_ids"] = {}
+    session["selected_pro_compare_ids"] = {}
 
     user_id = current_user_id()
     if user_id:
@@ -613,6 +619,30 @@ def set_selected_pro_run_id(tab_name, run_id):
     selected_runs = dict(session.get("selected_pro_run_ids", {}))
     selected_runs[key] = int(run_id)
     session["selected_pro_run_ids"] = selected_runs
+
+
+def selected_compare_run_ids(tab_name):
+    key = selected_pro_run_key(tab_name)
+    if not key:
+        return []
+    compare_runs = session.get("selected_pro_compare_ids", {})
+    values = compare_runs.get(key, [])
+    ids = []
+    for value in values:
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return ids[:2]
+
+
+def set_selected_compare_run_ids(tab_name, run_ids):
+    key = selected_pro_run_key(tab_name)
+    if not key:
+        return
+    compare_runs = dict(session.get("selected_pro_compare_ids", {}))
+    compare_runs[key] = [int(run_id) for run_id in run_ids[:2]]
+    session["selected_pro_compare_ids"] = compare_runs
 
 
 def metric_rows(metrics):
@@ -2878,6 +2908,8 @@ def make_model_tab(config):
             "selected_tuning_mode": "off",
             "selected_tuning_iterations": 10,
             "selected_threshold": 0.5,
+            "run_name": "",
+            "run_notes": "",
             "threshold_field": config.get("threshold_field"),
             "calibration_field": config.get("calibration_field"),
             "selected_target": None,
@@ -2892,6 +2924,7 @@ def make_model_tab(config):
             "report_download": None,
             "report_pdf_download": None,
             "run_history": [],
+            "run_comparison": None,
         }
     )
     return tab
@@ -2938,6 +2971,8 @@ def populate_tab_from_request(tab):
         tab["selected_model"] = tab["selected_models"][0] if tab["selected_models"] else tab["default_model"]
         selected_detail_model = request.form.get(tab.get("detail_model_field", ""), "best")
         tab["selected_detail_model"] = selected_detail_model if selected_detail_model == "best" or selected_detail_model in allowed_models else "best"
+        tab["run_name"] = request.form.get("run_name", "").strip()[:120]
+        tab["run_notes"] = request.form.get("run_notes", "").strip()[:2000]
     else:
         tab["selected_model"] = request.form.get(tab["model_field"], tab["default_model"])
         tab["selected_models"] = [tab["selected_model"]]
@@ -3563,6 +3598,14 @@ def histogram_plot_image(values, xlabel, title):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def figure_to_image(fig):
+    buffer = BytesIO()
+    fig.tight_layout()
+    fig.savefig(buffer, format="png", dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 def cv_fold_plot_image(fold_frame, metric_column, title):
     if fold_frame is None or fold_frame.empty or metric_column not in fold_frame:
         return None
@@ -3582,6 +3625,175 @@ def cv_fold_plot_image(fold_frame, metric_column, title):
     fig.savefig(buffer, format="png", dpi=140, bbox_inches="tight")
     plt.close(fig)
     return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+TREE_SHAP_MODELS = {"random_forest", "extra_trees", "xgboost", "lightgbm", "catboost"}
+
+
+def top_explainability_features(output, feature_names, limit=2):
+    feature_set = set(feature_names)
+    for artifact_name, column_name in [("variable_importance", "Predictor"), ("coefficients", "Term")]:
+        csv_data = (output.get("download_data") or {}).get(artifact_name)
+        if not csv_data:
+            continue
+        try:
+            frame = pd.read_csv(StringIO(csv_data))
+        except Exception:
+            continue
+        if column_name not in frame.columns:
+            continue
+        candidates = [
+            str(value)
+            for value in frame[column_name].dropna().tolist()
+            if str(value) in feature_set and str(value).lower() not in {"none", "intercept"}
+        ]
+        if candidates:
+            return candidates[:limit]
+    return list(feature_names[:limit])
+
+
+def feature_effect_grid(values):
+    clean = pd.Series(values).dropna().astype(float)
+    if clean.empty or clean.nunique() < 2:
+        return None
+    unique_values = np.sort(clean.unique())
+    if len(unique_values) <= 10:
+        return unique_values
+    low, high = np.quantile(clean, [0.05, 0.95])
+    if math.isclose(float(low), float(high)):
+        low, high = float(clean.min()), float(clean.max())
+    if math.isclose(float(low), float(high)):
+        return None
+    return np.linspace(low, high, 20)
+
+
+def model_response_values(estimator, x_values, task):
+    if task == "classification":
+        return np.ravel(classification_score_values(estimator, x_values))
+    return np.ravel(estimator.predict(x_values))
+
+
+def pdp_ice_plot_and_frame(estimator, x_values, features, task, seed):
+    features = [feature for feature in features if feature in x_values.columns]
+    if not features:
+        return None, None
+
+    sample_size = min(25, len(x_values))
+    sample = x_values.sample(sample_size, random_state=seed) if len(x_values) > sample_size else x_values.copy()
+    rows = []
+    fig, axes = plt.subplots(len(features), 1, figsize=(8.5, max(4.2, 3.2 * len(features))), squeeze=False)
+    for axis, feature in zip(axes.ravel(), features):
+        grid = feature_effect_grid(x_values[feature])
+        if grid is None:
+            axis.axis("off")
+            continue
+        ice_values = []
+        for _, row in sample.iterrows():
+            repeated = pd.DataFrame([row.to_dict()] * len(grid), columns=x_values.columns)
+            repeated[feature] = grid
+            responses = model_response_values(estimator, repeated, task)
+            ice_values.append(responses)
+            axis.plot(grid, responses, color="#cbd5e1", linewidth=0.8, alpha=0.55)
+        pdp_values = np.mean(np.vstack(ice_values), axis=0)
+        axis.plot(grid, pdp_values, color="#176b87", linewidth=2.4)
+        axis.set_title(feature)
+        axis.set_xlabel(feature)
+        axis.set_ylabel("Model score" if task == "classification" else "Prediction")
+        axis.grid(True, color="#e2e8f0", linewidth=0.8)
+        for grid_value, pdp_value in zip(grid, pdp_values):
+            rows.append({"Feature": feature, "Value": grid_value, "Partial dependence": pdp_value})
+
+    if not rows:
+        plt.close(fig)
+        return None, None
+    fig.suptitle("Partial dependence and ICE")
+    return figure_to_image(fig), pd.DataFrame(rows)
+
+
+def shap_values_matrix(estimator, x_values):
+    if shap is None:
+        return None
+    explainer = shap.TreeExplainer(estimator)
+    values = explainer.shap_values(x_values)
+    if isinstance(values, list):
+        return np.asarray(values[-1])
+    values = np.asarray(values)
+    if values.ndim == 3:
+        return values[:, :, -1]
+    return values
+
+
+def shap_summary_plot_and_frame(estimator, x_values, model_name):
+    if shap is None or model_name not in TREE_SHAP_MODELS:
+        return None, None
+    try:
+        sample_size = min(200, len(x_values))
+        sample = x_values.sample(sample_size, random_state=0) if len(x_values) > sample_size else x_values.copy()
+        values = shap_values_matrix(estimator, sample)
+        if values is None:
+            return None, None
+        values = np.asarray(values, dtype=float)
+        if values.ndim != 2 or values.shape[1] != len(sample.columns):
+            return None, None
+        summary = pd.DataFrame(
+            {
+                "Feature": sample.columns,
+                "Mean absolute SHAP": np.mean(np.abs(values), axis=0),
+            }
+        ).sort_values("Mean absolute SHAP", ascending=False)
+        summary = summary[summary["Mean absolute SHAP"] > 0].head(15)
+        if summary.empty:
+            return None, None
+
+        fig, ax = plt.subplots(figsize=(8.5, max(4.2, len(summary) * 0.35 + 1.2)))
+        ordered = summary.iloc[::-1]
+        ax.barh(ordered["Feature"], ordered["Mean absolute SHAP"], color="#176b87", alpha=0.86)
+        ax.set_xlabel("Mean absolute SHAP value")
+        ax.set_title("SHAP feature impact")
+        ax.grid(True, axis="x", color="#e2e8f0", linewidth=0.8)
+        return figure_to_image(fig), summary
+    except Exception:
+        return None, None
+
+
+def add_model_explainability(output, task, data, target, predictors, model_name, test_size, options=None):
+    try:
+        if task == "classification":
+            _, target_values, _, x_encoded = prepare_classification_data(
+                data,
+                target,
+                predictors,
+                binary_only=(model_name in {"logistic", "elastic_net_logistic"}),
+                options=options,
+            )
+            split = split_classification_data(target_values, x_encoded, test_size, options)
+            estimator = classification_estimator(model_name, options)
+        else:
+            y, x_encoded = prepare_regression_data(data, target, predictors, options=options)
+            split = split_regression_data(y, x_encoded, test_size, options)
+            estimator = regression_estimator(model_name, options)
+
+        estimator.fit(split["x_train"], split["y_train"])
+        features = top_explainability_features(output, x_encoded.columns, limit=2)
+        pdp_image, pdp_frame = pdp_ice_plot_and_frame(
+            estimator,
+            split["x_test"],
+            features,
+            task,
+            preprocessing_seed(options),
+        )
+        output["pdp_ice_plot"] = pdp_image
+        if pdp_frame is not None:
+            output.setdefault("download_data", {})["partial_dependence"] = pdp_frame.to_csv(index=False)
+
+        shap_image, shap_frame = shap_summary_plot_and_frame(estimator_leaf(estimator), split["x_test"], model_name)
+        output["shap_summary_plot"] = shap_image
+        if shap_frame is not None:
+            output.setdefault("download_data", {})["shap_summary"] = shap_frame.to_csv(index=False)
+    except Exception:
+        output["pdp_ice_plot"] = None
+        output["shap_summary_plot"] = None
+    return output
 
 
 def cv_summary_frame(metric_scores):
@@ -4341,6 +4553,16 @@ def handle_classification_comparison_submission(tab, dataset):
             detail_options,
         )
         detail_output = add_cv_diagnostics(detail_output, tab, dataset["data"], detail_model_name, detail_options)
+        detail_output = add_model_explainability(
+            detail_output,
+            "classification",
+            dataset["data"],
+            tab["selected_target"],
+            tab["selected_predictors"],
+            detail_model_name,
+            tab["selected_test_size"],
+            detail_options,
+        )
         for row in rows:
             row["_is_best"] = row["_model_name"] == best_model_name
             row["_is_detail"] = row["_model_name"] == detail_model_name
@@ -4398,8 +4620,11 @@ def output_metric_summary(tab):
 
 def run_history_entry(tab):
     detail_model = tab.get("selected_model", tab["default_model"])
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": timestamp,
+        "run_name": tab.get("run_name") or f"Run {timestamp}",
+        "run_notes": tab.get("run_notes") or "",
         "target": tab.get("selected_target") or "-",
         "models": ", ".join(model_label_for_run(tab, model) for model in tab.get("selected_models", [])),
         "detail_model": model_label_for_run(tab, detail_model),
@@ -4500,17 +4725,121 @@ def load_pro_run_from_db(tab_name, run_id):
     return snapshot
 
 
+def update_pro_run_snapshot(tab_name, run_id, updater):
+    user_id, current_id = current_pro_run_scope()
+    if not user_id or not current_id or tab_name not in PRO_TAB_NAMES:
+        return False
+
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT snapshot_json
+            FROM pro_runs
+            WHERE id = ? AND user_id = ? AND dataset_id = ? AND tab_name = ?
+            """,
+            (run_id, user_id, current_id, tab_name),
+        ).fetchone()
+        if row is None:
+            return False
+        try:
+            snapshot = json.loads(row["snapshot_json"])
+        except json.JSONDecodeError:
+            return False
+        updater(snapshot)
+        connection.execute(
+            "UPDATE pro_runs SET snapshot_json = ? WHERE id = ?",
+            (json.dumps(snapshot, default=pro_run_json_default), run_id),
+        )
+    return True
+
+
 def update_run_history(tab, runs, active_run_id=None):
     history = []
+    compare_ids = set(selected_compare_run_ids(tab["form_name"]))
     for run in runs:
         entry = run.get("history_entry")
         if not entry:
             continue
         entry = deepcopy(entry)
+        entry.setdefault("run_name", f"Run {entry.get('timestamp', '')}".strip())
+        entry.setdefault("run_notes", "")
         entry["run_id"] = run.get("run_id")
         entry["is_selected"] = active_run_id is not None and entry["run_id"] == active_run_id
+        entry["is_compare_selected"] = entry["run_id"] in compare_ids
         history.append(entry)
     tab["run_history"] = history
+
+
+def snapshot_metric_map(snapshot):
+    output = snapshot.get("output") or {}
+    return {metric.get("label"): metric.get("value") for metric in output.get("metrics", []) if metric.get("label")}
+
+
+def compact_snapshot_settings(snapshot, tab_name):
+    return {
+        "Target": snapshot.get("selected_target") or "-",
+        "Predictors": ", ".join(snapshot.get("selected_predictors") or []) or "-",
+        "Models": ", ".join(model_label_for_run({"form_name": tab_name}, model) for model in snapshot.get("selected_models") or []) or "-",
+        "Detail model": model_label_for_run({"form_name": tab_name}, snapshot.get("selected_model") or snapshot.get("selected_detail_model") or "-"),
+        "Test split": f"{float(snapshot.get('selected_test_size') or 0):.0%}",
+        "CV": f"{snapshot.get('selected_cv_folds')} folds" if snapshot.get("selected_cv_folds") else "Off",
+        "Tuning": {"off": "Off", "grid": "Grid search", "random": "Random search"}.get(snapshot.get("selected_tuning_mode", "off"), "Off"),
+        "Scaling": "On" if snapshot.get("selected_scaling") == "on" else "Off",
+        "Split seed": snapshot.get("selected_split_seed", "-"),
+    }
+
+
+def recommendation_compare_summary(snapshot):
+    recommendation = snapshot.get("recommendation") or {}
+    return recommendation.get("summary") or "-"
+
+
+def build_run_comparison(tab_name, run_ids):
+    snapshots = [load_pro_run_from_db(tab_name, run_id) for run_id in run_ids[:2]]
+    snapshots = [snapshot for snapshot in snapshots if snapshot]
+    if len(snapshots) != 2:
+        return None
+
+    metric_names = []
+    for snapshot in snapshots:
+        for name in snapshot_metric_map(snapshot):
+            if name not in metric_names:
+                metric_names.append(name)
+    setting_names = []
+    settings = [compact_snapshot_settings(snapshot, tab_name) for snapshot in snapshots]
+    for setting in settings:
+        for name in setting:
+            if name not in setting_names:
+                setting_names.append(name)
+
+    def run_label(snapshot):
+        entry = snapshot.get("history_entry") or {}
+        return entry.get("run_name") or f"Run {snapshot.get('run_id')}"
+
+    metric_maps = [snapshot_metric_map(snapshot) for snapshot in snapshots]
+    return {
+        "runs": [
+            {
+                "id": snapshot.get("run_id"),
+                "label": run_label(snapshot),
+                "timestamp": (snapshot.get("history_entry") or {}).get("timestamp", "-"),
+                "notes": (snapshot.get("history_entry") or {}).get("run_notes", ""),
+            }
+            for snapshot in snapshots
+        ],
+        "settings": [
+            {"name": name, "left": settings[0].get(name, "-"), "right": settings[1].get(name, "-")}
+            for name in setting_names
+        ],
+        "metrics": [
+            {"name": name, "left": metric_maps[0].get(name, "-"), "right": metric_maps[1].get(name, "-")}
+            for name in metric_names
+        ],
+        "recommendations": [
+            {"label": run_label(snapshot), "summary": recommendation_compare_summary(snapshot)}
+            for snapshot in snapshots
+        ],
+    }
 
 
 def prune_old_pro_runs(connection, user_id, current_id, tab_name):
@@ -4551,6 +4880,8 @@ def save_pro_run(tab):
         "selected_tuning_mode": tab.get("selected_tuning_mode"),
         "selected_tuning_iterations": tab.get("selected_tuning_iterations"),
         "selected_threshold": tab.get("selected_threshold", 0.5),
+        "run_name": tab.get("run_name", ""),
+        "run_notes": tab.get("run_notes", ""),
         "selected_target": tab.get("selected_target"),
         "selected_predictors": list(tab.get("selected_predictors", [])),
         "comparison_html": tab.get("comparison_html"),
@@ -4599,6 +4930,8 @@ def restore_pro_run(tab, snapshot):
         "selected_tuning_mode",
         "selected_tuning_iterations",
         "selected_threshold",
+        "run_name",
+        "run_notes",
         "selected_target",
         "selected_predictors",
         "comparison_html",
@@ -4633,6 +4966,7 @@ def restore_pro_runs(model_tabs, exclude=None):
         if tab_name not in exclude and active_run:
             restore_pro_run(tab, active_run)
         update_run_history(tab, runs, active_run.get("run_id") if active_run else None)
+        tab["run_comparison"] = build_run_comparison(tab_name, selected_compare_run_ids(tab_name))
 
 def handle_classification_submission(tab, dataset):
     populate_tab_from_request(tab)
@@ -4812,6 +5146,16 @@ def handle_regression_comparison_submission(tab, dataset):
             detail_options,
         )
         detail_output = add_cv_diagnostics(detail_output, tab, dataset["data"], detail_model_name, detail_options)
+        detail_output = add_model_explainability(
+            detail_output,
+            "regression",
+            dataset["data"],
+            tab["selected_target"],
+            tab["selected_predictors"],
+            detail_model_name,
+            tab["selected_test_size"],
+            detail_options,
+        )
         for row in rows:
             row["_is_best"] = row["_model_name"] == best_model_name
             row["_is_detail"] = row["_model_name"] == detail_model_name
@@ -4912,6 +5256,43 @@ def index():
         if load_pro_run_from_db(tab_name, run_id) is None:
             return Response("Pro run not found.", status=404, mimetype="text/plain")
         set_selected_pro_run_id(tab_name, run_id)
+        return redirect(url_for("index") + f"#{tab_name}_recent_runs")
+
+    if authenticated and request.method == "POST" and form_name == "update_pro_run_notes":
+        tab_name = request.form.get("tab_name", "")
+        try:
+            run_id = int(request.form.get("run_id", ""))
+        except (TypeError, ValueError):
+            return Response("Invalid Pro run.", status=400, mimetype="text/plain")
+        if tab_name not in PRO_TAB_NAMES:
+            return Response("Unknown Pro tab.", status=404, mimetype="text/plain")
+        run_name = request.form.get("run_name", "").strip()[:120]
+        run_notes = request.form.get("run_notes", "").strip()[:2000]
+
+        def apply_notes(snapshot):
+            entry = snapshot.setdefault("history_entry", {})
+            entry["run_name"] = run_name or entry.get("run_name") or f"Run {entry.get('timestamp', '')}".strip()
+            entry["run_notes"] = run_notes
+            snapshot["run_name"] = entry["run_name"]
+            snapshot["run_notes"] = run_notes
+
+        if not update_pro_run_snapshot(tab_name, run_id, apply_notes):
+            return Response("Pro run not found.", status=404, mimetype="text/plain")
+        return redirect(url_for("index") + f"#{tab_name}_recent_runs")
+
+    if authenticated and request.method == "POST" and form_name == "compare_pro_runs":
+        tab_name = request.form.get("tab_name", "")
+        if tab_name not in PRO_TAB_NAMES:
+            return Response("Unknown Pro tab.", status=404, mimetype="text/plain")
+        run_ids = []
+        for value in request.form.getlist("compare_run_ids"):
+            try:
+                run_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if load_pro_run_from_db(tab_name, run_id) is not None:
+                run_ids.append(run_id)
+        set_selected_compare_run_ids(tab_name, run_ids[:2])
         return redirect(url_for("index") + f"#{tab_name}_recent_runs")
 
     if authenticated and request.method == "POST" and form_name == "upload":

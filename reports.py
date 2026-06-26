@@ -44,6 +44,8 @@ class ReportRenderer:
         return [
             {"Field": "Generated", "Value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
             {"Field": "Run time", "Value": history_entry.get("timestamp", "-")},
+            {"Field": "Run name", "Value": history_entry.get("run_name", snapshot.get("run_name", "-"))},
+            {"Field": "Run notes", "Value": history_entry.get("run_notes", snapshot.get("run_notes", "-")) or "-"},
             {"Field": "Report type", "Value": "Pro classification" if tab_name == "pro_classification" else "Pro regression"},
             {"Field": "Dataset", "Value": dataset.get("filename", "-") if dataset else "-"},
             {"Field": "Rows", "Value": len(data) if data is not None else "-"},
@@ -134,6 +136,18 @@ class ReportRenderer:
                 sections.extend(["<h4>Summary</h4>", cv_summary_table])
             if cv_diagnostics_table:
                 sections.extend(["<h4>Fold scores</h4>", cv_diagnostics_table])
+        if output.get("pdp_ice_plot") or output.get("shap_summary_plot"):
+            sections.extend(["<h3>Model explainability</h3>"])
+            if output.get("pdp_ice_plot"):
+                sections.append(self.report_image("Partial dependence and ICE", output.get("pdp_ice_plot"), "Partial dependence and ICE plot"))
+            if output.get("shap_summary_plot"):
+                sections.append(self.report_image("SHAP feature impact", output.get("shap_summary_plot"), "SHAP feature impact plot"))
+        partial_dependence_table = self.csv_report_table(artifacts.get("partial_dependence"))
+        shap_summary_table = self.csv_report_table(artifacts.get("shap_summary"))
+        if partial_dependence_table:
+            sections.extend(["<h4>Partial dependence data</h4>", partial_dependence_table])
+        if shap_summary_table:
+            sections.extend(["<h4>SHAP summary</h4>", shap_summary_table])
         for heading, key in [
             ("Coefficients", "coefficients_html"),
             ("Variable importance", "importances_html"),
@@ -411,6 +425,10 @@ class ReportRenderer:
             self.add_pdf_image_page(pdf, "Cross-Validation Fold Scores", output.get("cv_plot"))
             self.add_pdf_table_pages(pdf, "Cross-Validation Summary", self.csv_report_frame(artifacts.get("cv_summary")), rows_per_page=24)
             self.add_pdf_table_pages(pdf, "Cross-Validation Fold Scores", self.csv_report_frame(artifacts.get("cv_diagnostics")), rows_per_page=24)
+            self.add_pdf_image_page(pdf, "Partial Dependence and ICE", output.get("pdp_ice_plot"))
+            self.add_pdf_table_pages(pdf, "Partial Dependence Data", self.csv_report_frame(artifacts.get("partial_dependence")), rows_per_page=24)
+            self.add_pdf_image_page(pdf, "SHAP Feature Impact", output.get("shap_summary_plot"))
+            self.add_pdf_table_pages(pdf, "SHAP Summary", self.csv_report_frame(artifacts.get("shap_summary")), rows_per_page=24)
 
             details_frame_pdf = self.csv_report_frame(artifacts.get("details"))
             if details_frame_pdf is None:

@@ -1,3 +1,123 @@
+{% macro render_pro_run_history(tab) %}
+        {% if tab.run_history %}
+          <div id="{{ tab.id }}_recent_runs" class="panel">
+            <h2>Recent Pro runs</h2>
+            <form id="{{ tab.id }}_compare_form" method="post" action="/">
+              <input type="hidden" name="form_name" value="compare_pro_runs">
+              <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
+              <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
+            </form>
+            <div class="table-wrap">
+              <table class="run-history-table">
+                <thead>
+                  <tr>
+                    <th>Compare</th>
+                    <th>Actions</th>
+                    <th>Name</th>
+                    <th>Notes</th>
+                    <th>Time</th>
+                    <th>Target</th>
+                    <th>Detail</th>
+                    <th>Summary</th>
+                    <th>Models</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for run in tab.run_history %}
+                    <tr>
+                      <td class="history-compare-cell">
+                        <input form="{{ tab.id }}_compare_form" type="checkbox" name="compare_run_ids" value="{{ run.run_id }}" data-run-compare-checkbox="{{ tab.id }}_compare_form" {{ 'checked' if run.is_compare_selected else '' }}>
+                      </td>
+                      <td class="history-actions-cell">
+                        <form id="{{ tab.id }}_notes_{{ run.run_id }}" class="inline-form history-button-stack" method="post" action="/">
+                          <input type="hidden" name="form_name" value="update_pro_run_notes">
+                          <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
+                          <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
+                          <input type="hidden" name="run_id" value="{{ run.run_id }}">
+                          <button class="small-action secondary-action" type="submit">Save notes</button>
+                        </form>
+                        {% if run.is_selected %}
+                          <span class="loaded-run">Loaded</span>
+                        {% else %}
+                          <form class="inline-form history-button-stack" method="post" action="/">
+                            <input type="hidden" name="form_name" value="load_pro_run">
+                            <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
+                            <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
+                            <input type="hidden" name="run_id" value="{{ run.run_id }}">
+                            <button class="small-action" type="submit">Load</button>
+                          </form>
+                        {% endif %}
+                      </td>
+                      <td class="history-name-cell">
+                        <input form="{{ tab.id }}_notes_{{ run.run_id }}" class="history-input" name="run_name" type="text" maxlength="120" value="{{ run.run_name }}">
+                      </td>
+                      <td class="history-notes-cell">
+                        <textarea form="{{ tab.id }}_notes_{{ run.run_id }}" class="history-notes" name="run_notes" maxlength="2000" rows="2">{{ run.run_notes }}</textarea>
+                      </td>
+                      <td class="history-time-cell">{{ run.timestamp }}</td>
+                      <td>{{ run.target }}</td>
+                      <td>{{ run.detail_model }}</td>
+                      <td class="history-summary-cell">{{ run.summary }}</td>
+                      <td class="history-models-cell">{{ run.models }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <div class="history-actions">
+              <button class="small-action" form="{{ tab.id }}_compare_form" type="submit">Compare selected runs</button>
+            </div>
+            {% if tab.run_comparison %}
+              <div class="comparison-panel">
+                <h3>Historical run comparison</h3>
+                <div class="comparison-columns">
+                  {% for run in tab.run_comparison.runs %}
+                    <section>
+                      <h4>{{ run.label }}</h4>
+                      <p>{{ run.timestamp }}</p>
+                      {% if run.notes %}
+                        <p>{{ run.notes }}</p>
+                      {% endif %}
+                    </section>
+                  {% endfor %}
+                </div>
+                <h4>Settings</h4>
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>Setting</th><th>{{ tab.run_comparison.runs[0].label }}</th><th>{{ tab.run_comparison.runs[1].label }}</th></tr></thead>
+                    <tbody>
+                      {% for row in tab.run_comparison.settings %}
+                        <tr><td>{{ row.name }}</td><td>{{ row.left }}</td><td>{{ row.right }}</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+                <h4>Metrics</h4>
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>Metric</th><th>{{ tab.run_comparison.runs[0].label }}</th><th>{{ tab.run_comparison.runs[1].label }}</th></tr></thead>
+                    <tbody>
+                      {% for row in tab.run_comparison.metrics %}
+                        <tr><td>{{ row.name }}</td><td>{{ row.left }}</td><td>{{ row.right }}</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+                <h4>Recommendations</h4>
+                <div class="comparison-columns">
+                  {% for item in tab.run_comparison.recommendations %}
+                    <section>
+                      <h4>{{ item.label }}</h4>
+                      <p>{{ item.summary }}</p>
+                    </section>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+{% endmacro %}
+
 {% macro render_classification_tab(tab, active_tab, has_data, columns) %}
       <section id="{{ tab.id }}" class="tab-panel {{ 'active' if active_tab == tab.id else '' }}">
         <div class="panel">
@@ -11,34 +131,41 @@
                 <label id="{{ tab.model_field }}_label" for="{{ tab.model_field }}">Model type</label>
                 {% if tab.allow_model_comparison %}
                 <div class="model-choice-actions" aria-label="Model type selection actions">
+                  <button type="button" class="small-action secondary-action" data-model-preset="dummy,logistic,ridge_classifier,naive_bayes,tree">Fast scan</button>
+                  <button type="button" class="small-action secondary-action" data-model-preset="logistic,random_forest,extra_trees,gradient_boosting,svm,knn,naive_bayes">Balanced</button>
+                  <button type="button" class="small-action secondary-action" data-model-preset="random_forest,extra_trees,gradient_boosting,hist_gradient_boosting,xgboost,lightgbm,catboost,stacking,voting">High accuracy</button>
+                  <button type="button" class="small-action secondary-action" data-model-preset="dummy,logistic,elastic_net_logistic,ridge_classifier,tree,lda,naive_bayes">Explainable</button>
                   <button type="button" class="small-action secondary-action" data-model-select-all>Select all</button>
                   <button type="button" class="small-action secondary-action" data-model-deselect-all>Deselect all</button>
                 </div>
                 <div id="{{ tab.model_field }}" class="model-choice-grid" role="group" aria-labelledby="{{ tab.model_field }}_label">
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="adaboost" {{ 'checked' if 'adaboost' in tab.selected_models else '' }}> AdaBoost</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="catboost" {{ 'checked' if 'catboost' in tab.selected_models else '' }}> CatBoost</label>
+                  <div class="model-family-heading">Linear, baseline and discriminant</div>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="dummy" {{ 'checked' if 'dummy' in tab.selected_models else '' }}> Dummy Classifier</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="elastic_net_logistic" {{ 'checked' if 'elastic_net_logistic' in tab.selected_models else '' }}> Elastic Net Logistic Regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="extra_trees" {{ 'checked' if 'extra_trees' in tab.selected_models else '' }}> Extra Trees</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="gaussian_process" {{ 'checked' if 'gaussian_process' in tab.selected_models else '' }}> Gaussian Process</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="gradient_boosting" {{ 'checked' if 'gradient_boosting' in tab.selected_models else '' }}> Gradient Boosting</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="hist_gradient_boosting" {{ 'checked' if 'hist_gradient_boosting' in tab.selected_models else '' }}> Hist Gradient Boosting</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="knn" {{ 'checked' if 'knn' in tab.selected_models else '' }}> kNN</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="lightgbm" {{ 'checked' if 'lightgbm' in tab.selected_models else '' }}> LightGBM</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="lda" {{ 'checked' if 'lda' in tab.selected_models else '' }}> Linear Discriminant Analysis</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="linear_svm" {{ 'checked' if 'linear_svm' in tab.selected_models else '' }}> Linear SVM</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="logistic" {{ 'checked' if 'logistic' in tab.selected_models else '' }}> Logistic regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="mlp" {{ 'checked' if 'mlp' in tab.selected_models else '' }}> MLP Neural Network</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="naive_bayes" {{ 'checked' if 'naive_bayes' in tab.selected_models else '' }}> Naive Bayes</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="passive_aggressive" {{ 'checked' if 'passive_aggressive' in tab.selected_models else '' }}> Passive Aggressive</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="qda" {{ 'checked' if 'qda' in tab.selected_models else '' }}> Quadratic Discriminant Analysis</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="random_forest" {{ 'checked' if 'random_forest' in tab.selected_models else '' }}> Random Forest</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="ridge_classifier" {{ 'checked' if 'ridge_classifier' in tab.selected_models else '' }}> Ridge Classifier</label>
+                  <div class="model-family-heading">Trees and boosting</div>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="adaboost" {{ 'checked' if 'adaboost' in tab.selected_models else '' }}> AdaBoost</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="catboost" {{ 'checked' if 'catboost' in tab.selected_models else '' }}> CatBoost</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="extra_trees" {{ 'checked' if 'extra_trees' in tab.selected_models else '' }}> Extra Trees</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="gradient_boosting" {{ 'checked' if 'gradient_boosting' in tab.selected_models else '' }}> Gradient Boosting</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="hist_gradient_boosting" {{ 'checked' if 'hist_gradient_boosting' in tab.selected_models else '' }}> Hist Gradient Boosting</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="lightgbm" {{ 'checked' if 'lightgbm' in tab.selected_models else '' }}> LightGBM</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="random_forest" {{ 'checked' if 'random_forest' in tab.selected_models else '' }}> Random Forest</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="stacking" {{ 'checked' if 'stacking' in tab.selected_models else '' }}> Stacking Classifier</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="svm" {{ 'checked' if 'svm' in tab.selected_models else '' }}> Support Vector Machine</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="tree" {{ 'checked' if 'tree' in tab.selected_models else '' }}> Tree model</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="voting" {{ 'checked' if 'voting' in tab.selected_models else '' }}> Voting Classifier</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="xgboost" {{ 'checked' if 'xgboost' in tab.selected_models else '' }}> XGBoost</label>
+                  <div class="model-family-heading">Kernel, distance and neural</div>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="gaussian_process" {{ 'checked' if 'gaussian_process' in tab.selected_models else '' }}> Gaussian Process</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="knn" {{ 'checked' if 'knn' in tab.selected_models else '' }}> kNN</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="mlp" {{ 'checked' if 'mlp' in tab.selected_models else '' }}> MLP Neural Network</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="svm" {{ 'checked' if 'svm' in tab.selected_models else '' }}> Support Vector Machine</label>
                 </div>
                 {% else %}
                 <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="10"{% endif %} required>
@@ -223,6 +350,16 @@
               </div>
               {% endif %}
               {% endif %}
+              {% if tab.allow_model_comparison %}
+              <div class="form-field run-name-field">
+                <label for="{{ tab.id }}_run_name">Run name</label>
+                <input id="{{ tab.id }}_run_name" name="run_name" type="text" maxlength="120" value="{{ tab.run_name }}" placeholder="Optional experiment name">
+              </div>
+              <div class="form-field run-notes-field">
+                <label for="{{ tab.id }}_run_notes">Run notes</label>
+                <textarea id="{{ tab.id }}_run_notes" name="run_notes" maxlength="2000" rows="3" placeholder="Optional notes, hypothesis, or setup context">{{ tab.run_notes }}</textarea>
+              </div>
+              {% endif %}
               <div class="form-field run-field">
                 <button type="submit">Run</button>
               </div>
@@ -233,49 +370,7 @@
           {% endif %}
         </div>
 
-        {% if tab.run_history %}
-          <div id="{{ tab.id }}_recent_runs" class="panel">
-            <h2>Recent Pro runs</h2>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Target</th>
-                    <th>Models</th>
-                    <th>Detail</th>
-                    <th>Summary</th>
-                    <th>Result</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for run in tab.run_history %}
-                    <tr>
-                      <td>{{ run.timestamp }}</td>
-                      <td>{{ run.target }}</td>
-                      <td>{{ run.models }}</td>
-                      <td>{{ run.detail_model }}</td>
-                      <td>{{ run.summary }}</td>
-                      <td>
-                        {% if run.is_selected %}
-                          <span class="loaded-run">Loaded</span>
-                        {% else %}
-                          <form class="inline-form" method="post" action="/">
-                            <input type="hidden" name="form_name" value="load_pro_run">
-                            <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
-                            <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
-                            <input type="hidden" name="run_id" value="{{ run.run_id }}">
-                            <button class="small-action" type="submit">Load</button>
-                          </form>
-                        {% endif %}
-                      </td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        {% endif %}
+        {{ render_pro_run_history(tab) }}
         {% if tab.comparison_html %}
           <div class="panel">
             <h2>Model comparison</h2>
@@ -406,6 +501,18 @@
                 </div>
               {% endif %}
             {% endif %}
+            {% if tab.output.pdp_ice_plot %}
+              <h3>Partial dependence and ICE</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ tab.output.pdp_ice_plot }}" alt="Partial dependence and ICE plot">
+              </div>
+            {% endif %}
+            {% if tab.output.shap_summary_plot %}
+              <h3>SHAP feature impact</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ tab.output.shap_summary_plot }}" alt="SHAP feature impact plot">
+              </div>
+            {% endif %}
             <h3>Confusion matrix</h3>
             <div class="table-wrap">
               {{ tab.output.confusion_html|safe }}
@@ -458,33 +565,40 @@
                 <label id="{{ tab.model_field }}_label" for="{{ tab.model_field }}">Model type</label>
                 {% if tab.allow_model_comparison %}
                 <div class="model-choice-actions" aria-label="Model type selection actions">
+                  <button type="button" class="small-action secondary-action" data-model-preset="linear,ridge,lasso,bayesian_ridge,random_forest,gradient_boosting">Fast scan</button>
+                  <button type="button" class="small-action secondary-action" data-model-preset="linear,ridge,lasso,elastic_net,random_forest,extra_trees,gradient_boosting,svr,knn">Balanced</button>
+                  <button type="button" class="small-action secondary-action" data-model-preset="random_forest,extra_trees,gradient_boosting,lightgbm,xgboost,catboost,stacking,voting,svr,kernel_ridge">High accuracy</button>
+                  <button type="button" class="small-action secondary-action" data-model-preset="linear,ridge,lasso,elastic_net,bayesian_ridge,huber,pls,poisson,tweedie">Explainable</button>
                   <button type="button" class="small-action secondary-action" data-model-select-all>Select all</button>
                   <button type="button" class="small-action secondary-action" data-model-deselect-all>Deselect all</button>
                 </div>
                 <div id="{{ tab.model_field }}" class="model-choice-grid" role="group" aria-labelledby="{{ tab.model_field }}_label">
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="bagging" {{ 'checked' if 'bagging' in tab.selected_models else '' }}> Bagging Regressor</label>
+                  <div class="model-family-heading">Linear, robust and GLM</div>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="bayesian_ridge" {{ 'checked' if 'bayesian_ridge' in tab.selected_models else '' }}> Bayesian Ridge Regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="catboost" {{ 'checked' if 'catboost' in tab.selected_models else '' }}> CatBoost Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="elastic_net" {{ 'checked' if 'elastic_net' in tab.selected_models else '' }}> Elastic Net Regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="extra_trees" {{ 'checked' if 'extra_trees' in tab.selected_models else '' }}> Extra Trees Regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="gradient_boosting" {{ 'checked' if 'gradient_boosting' in tab.selected_models else '' }}> Gradient Boosting Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="huber" {{ 'checked' if 'huber' in tab.selected_models else '' }}> Huber Regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="kernel_ridge" {{ 'checked' if 'kernel_ridge' in tab.selected_models else '' }}> Kernel Ridge Regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="knn" {{ 'checked' if 'knn' in tab.selected_models else '' }}> kNN Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="lasso" {{ 'checked' if 'lasso' in tab.selected_models else '' }}> Lasso Regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="lightgbm" {{ 'checked' if 'lightgbm' in tab.selected_models else '' }}> LightGBM Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="linear" {{ 'checked' if 'linear' in tab.selected_models else '' }}> Linear Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="passive_aggressive" {{ 'checked' if 'passive_aggressive' in tab.selected_models else '' }}> Passive Aggressive Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="pls" {{ 'checked' if 'pls' in tab.selected_models else '' }}> PLS Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="poisson" {{ 'checked' if 'poisson' in tab.selected_models else '' }}> Poisson Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="quantile" {{ 'checked' if 'quantile' in tab.selected_models else '' }}> Quantile Regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="random_forest" {{ 'checked' if 'random_forest' in tab.selected_models else '' }}> Random Forest Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="ridge" {{ 'checked' if 'ridge' in tab.selected_models else '' }}> Ridge Regression</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="stacking" {{ 'checked' if 'stacking' in tab.selected_models else '' }}> Stacking Regressor</label>
-                  <label><input type="checkbox" name="{{ tab.model_field }}" value="svr" {{ 'checked' if 'svr' in tab.selected_models else '' }}> Support Vector Regression</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="tweedie" {{ 'checked' if 'tweedie' in tab.selected_models else '' }}> Tweedie Regression</label>
+                  <div class="model-family-heading">Trees, boosting and ensembles</div>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="bagging" {{ 'checked' if 'bagging' in tab.selected_models else '' }}> Bagging Regressor</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="catboost" {{ 'checked' if 'catboost' in tab.selected_models else '' }}> CatBoost Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="extra_trees" {{ 'checked' if 'extra_trees' in tab.selected_models else '' }}> Extra Trees Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="gradient_boosting" {{ 'checked' if 'gradient_boosting' in tab.selected_models else '' }}> Gradient Boosting Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="lightgbm" {{ 'checked' if 'lightgbm' in tab.selected_models else '' }}> LightGBM Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="random_forest" {{ 'checked' if 'random_forest' in tab.selected_models else '' }}> Random Forest Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="stacking" {{ 'checked' if 'stacking' in tab.selected_models else '' }}> Stacking Regressor</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="voting" {{ 'checked' if 'voting' in tab.selected_models else '' }}> Voting Regressor</label>
                   <label><input type="checkbox" name="{{ tab.model_field }}" value="xgboost" {{ 'checked' if 'xgboost' in tab.selected_models else '' }}> XGBoost Regression</label>
+                  <div class="model-family-heading">Kernel and distance</div>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="kernel_ridge" {{ 'checked' if 'kernel_ridge' in tab.selected_models else '' }}> Kernel Ridge Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="knn" {{ 'checked' if 'knn' in tab.selected_models else '' }}> kNN Regression</label>
+                  <label><input type="checkbox" name="{{ tab.model_field }}" value="svr" {{ 'checked' if 'svr' in tab.selected_models else '' }}> Support Vector Regression</label>
                 </div>
                 {% else %}
                 <select id="{{ tab.model_field }}" class="model-type-select" name="{{ tab.model_field }}" {% if tab.allow_model_comparison %}multiple size="11"{% endif %} required>
@@ -640,6 +754,16 @@
                 </div>
               </details>
               {% endif %}
+              {% if tab.allow_model_comparison %}
+              <div class="form-field run-name-field">
+                <label for="{{ tab.id }}_run_name">Run name</label>
+                <input id="{{ tab.id }}_run_name" name="run_name" type="text" maxlength="120" value="{{ tab.run_name }}" placeholder="Optional experiment name">
+              </div>
+              <div class="form-field run-notes-field">
+                <label for="{{ tab.id }}_run_notes">Run notes</label>
+                <textarea id="{{ tab.id }}_run_notes" name="run_notes" maxlength="2000" rows="3" placeholder="Optional notes, hypothesis, or setup context">{{ tab.run_notes }}</textarea>
+              </div>
+              {% endif %}
               <div class="form-field run-field">
                 <button type="submit">Run</button>
               </div>
@@ -650,49 +774,7 @@
           {% endif %}
         </div>
 
-        {% if tab.run_history %}
-          <div id="{{ tab.id }}_recent_runs" class="panel">
-            <h2>Recent Pro runs</h2>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Target</th>
-                    <th>Models</th>
-                    <th>Detail</th>
-                    <th>Summary</th>
-                    <th>Result</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for run in tab.run_history %}
-                    <tr>
-                      <td>{{ run.timestamp }}</td>
-                      <td>{{ run.target }}</td>
-                      <td>{{ run.models }}</td>
-                      <td>{{ run.detail_model }}</td>
-                      <td>{{ run.summary }}</td>
-                      <td>
-                        {% if run.is_selected %}
-                          <span class="loaded-run">Loaded</span>
-                        {% else %}
-                          <form class="inline-form" method="post" action="/">
-                            <input type="hidden" name="form_name" value="load_pro_run">
-                            <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
-                            <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
-                            <input type="hidden" name="run_id" value="{{ run.run_id }}">
-                            <button class="small-action" type="submit">Load</button>
-                          </form>
-                        {% endif %}
-                      </td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        {% endif %}
+        {{ render_pro_run_history(tab) }}
         {% if tab.comparison_html %}
           <div class="panel">
             <h2>Model comparison</h2>
@@ -822,6 +904,18 @@
                   {{ tab.output.cv_diagnostics_html|safe }}
                 </div>
               {% endif %}
+            {% endif %}
+            {% if tab.output.pdp_ice_plot %}
+              <h3>Partial dependence and ICE</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ tab.output.pdp_ice_plot }}" alt="Partial dependence and ICE plot">
+              </div>
+            {% endif %}
+            {% if tab.output.shap_summary_plot %}
+              <h3>SHAP feature impact</h3>
+              <div class="tree-plot">
+                <img src="data:image/png;base64,{{ tab.output.shap_summary_plot }}" alt="SHAP feature impact plot">
+              </div>
             {% endif %}
             {% if tab.output.predicted_actual_plot %}
               <h3>Predicted vs actual</h3>
