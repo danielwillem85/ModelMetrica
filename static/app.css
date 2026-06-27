@@ -492,6 +492,15 @@ button:hover {
   padding: 7px 9px;
   width: 100%;
 }
+.history-name-display {
+  background: transparent;
+  line-height: 1.35;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+  user-select: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .history-notes {
   min-width: 0;
   resize: vertical;

@@ -38,14 +38,20 @@ class ReportRenderer:
     def report_metadata_rows(self, tab_name, snapshot, dataset):
         data = dataset.get("data") if dataset else None
         history_entry = snapshot.get("history_entry") or {}
+        run_name = history_entry.get("run_name", snapshot.get("run_name", "-"))
+        run_notes = history_entry.get("run_notes", snapshot.get("run_notes", ""))
+        if run_name is None or str(run_name).strip().lower() == "none":
+            run_name = "-"
+        if run_notes is None or str(run_notes).strip().lower() == "none":
+            run_notes = ""
         detail_model = snapshot.get("selected_model") or snapshot.get("selected_detail_model") or "-"
         cv_folds = snapshot.get("selected_cv_folds")
         preprocessing = self.preprocessing_details(snapshot)
         return [
             {"Field": "Generated", "Value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
             {"Field": "Run time", "Value": history_entry.get("timestamp", "-")},
-            {"Field": "Run name", "Value": history_entry.get("run_name", snapshot.get("run_name", "-"))},
-            {"Field": "Run notes", "Value": history_entry.get("run_notes", snapshot.get("run_notes", "-")) or "-"},
+            {"Field": "Run name", "Value": run_name},
+            {"Field": "Run notes", "Value": run_notes or "-"},
             {"Field": "Report type", "Value": "Pro classification" if tab_name == "pro_classification" else "Pro regression"},
             {"Field": "Dataset", "Value": dataset.get("filename", "-") if dataset else "-"},
             {"Field": "Rows", "Value": len(data) if data is not None else "-"},

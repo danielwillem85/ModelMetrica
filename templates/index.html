@@ -41,7 +41,7 @@
                         {% endif %}
                       </td>
                       <td class="history-name-cell">
-                        <input form="{{ tab.id }}_notes_{{ run.run_id }}" class="history-input" name="run_name" type="text" maxlength="120" value="{{ run.run_name }}">
+                        <div class="history-name-display">{{ run.run_name or '' }}</div>
                       </td>
                       <td class="history-notes-cell">
                         <form id="{{ tab.id }}_notes_{{ run.run_id }}" class="inline-form history-notes-form" method="post" action="/">
@@ -49,7 +49,7 @@
                           <input type="hidden" name="active_tab" value="{{ tab.form_name }}">
                           <input type="hidden" name="tab_name" value="{{ tab.form_name }}">
                           <input type="hidden" name="run_id" value="{{ run.run_id }}">
-                          <textarea class="history-notes" name="run_notes" maxlength="2000" rows="2">{{ run.run_notes }}</textarea>
+                          <textarea class="history-notes" name="run_notes" maxlength="2000" rows="2">{{ run.run_notes or '' }}</textarea>
                           <button class="small-action secondary-action history-save-button" type="submit">Save note</button>
                         </form>
                       </td>
@@ -351,11 +351,11 @@
               {% if tab.allow_model_comparison %}
               <div class="form-field run-name-field">
                 <label for="{{ tab.id }}_run_name">Run name</label>
-                <input id="{{ tab.id }}_run_name" name="run_name" type="text" maxlength="120" value="{{ tab.run_name }}" placeholder="Optional experiment name">
+                <input id="{{ tab.id }}_run_name" name="run_name" type="text" maxlength="120" value="{{ tab.run_name or '' }}" placeholder="Optional experiment name">
               </div>
               <div class="form-field run-notes-field">
                 <label for="{{ tab.id }}_run_notes">Run notes</label>
-                <textarea id="{{ tab.id }}_run_notes" name="run_notes" maxlength="2000" rows="3" placeholder="Optional notes, hypothesis, or setup context">{{ tab.run_notes }}</textarea>
+                <textarea id="{{ tab.id }}_run_notes" name="run_notes" maxlength="2000" rows="3" placeholder="Optional notes, hypothesis, or setup context">{{ tab.run_notes or '' }}</textarea>
               </div>
               {% endif %}
               <div class="form-field run-field">
@@ -755,11 +755,11 @@
               {% if tab.allow_model_comparison %}
               <div class="form-field run-name-field">
                 <label for="{{ tab.id }}_run_name">Run name</label>
-                <input id="{{ tab.id }}_run_name" name="run_name" type="text" maxlength="120" value="{{ tab.run_name }}" placeholder="Optional experiment name">
+                <input id="{{ tab.id }}_run_name" name="run_name" type="text" maxlength="120" value="{{ tab.run_name or '' }}" placeholder="Optional experiment name">
               </div>
               <div class="form-field run-notes-field">
                 <label for="{{ tab.id }}_run_notes">Run notes</label>
-                <textarea id="{{ tab.id }}_run_notes" name="run_notes" maxlength="2000" rows="3" placeholder="Optional notes, hypothesis, or setup context">{{ tab.run_notes }}</textarea>
+                <textarea id="{{ tab.id }}_run_notes" name="run_notes" maxlength="2000" rows="3" placeholder="Optional notes, hypothesis, or setup context">{{ tab.run_notes or '' }}</textarea>
               </div>
               {% endif %}
               <div class="form-field run-field">

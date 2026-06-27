@@ -4618,13 +4618,27 @@ def output_metric_summary(tab):
     return ", ".join(parts) if parts else "Regression run"
 
 
+def clean_run_text(value):
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() == "none" else text
+
+
+def default_run_name(timestamp):
+    timestamp_text = clean_run_text(timestamp)
+    return f"Run {timestamp_text}".strip() if timestamp_text else "Run"
+
+
 def run_history_entry(tab):
     detail_model = tab.get("selected_model", tab["default_model"])
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    run_name = clean_run_text(tab.get("run_name")) or default_run_name(timestamp)
+    run_notes = clean_run_text(tab.get("run_notes"))
     return {
         "timestamp": timestamp,
-        "run_name": tab.get("run_name") or f"Run {timestamp}",
-        "run_notes": tab.get("run_notes") or "",
+        "run_name": run_name,
+        "run_notes": run_notes,
         "target": tab.get("selected_target") or "-",
         "models": ", ".join(model_label_for_run(tab, model) for model in tab.get("selected_models", [])),
         "detail_model": model_label_for_run(tab, detail_model),
@@ -4761,8 +4775,8 @@ def update_run_history(tab, runs, active_run_id=None):
         if not entry:
             continue
         entry = deepcopy(entry)
-        entry.setdefault("run_name", f"Run {entry.get('timestamp', '')}".strip())
-        entry.setdefault("run_notes", "")
+        entry["run_name"] = clean_run_text(entry.get("run_name")) or default_run_name(entry.get("timestamp", ""))
+        entry["run_notes"] = clean_run_text(entry.get("run_notes"))
         entry["run_id"] = run.get("run_id")
         entry["is_selected"] = active_run_id is not None and entry["run_id"] == active_run_id
         entry["is_compare_selected"] = entry["run_id"] in compare_ids
@@ -4814,7 +4828,7 @@ def build_run_comparison(tab_name, run_ids):
 
     def run_label(snapshot):
         entry = snapshot.get("history_entry") or {}
-        return entry.get("run_name") or f"Run {snapshot.get('run_id')}"
+        return clean_run_text(entry.get("run_name")) or f"Run {snapshot.get('run_id')}"
 
     metric_maps = [snapshot_metric_map(snapshot) for snapshot in snapshots]
     return {
@@ -4823,7 +4837,7 @@ def build_run_comparison(tab_name, run_ids):
                 "id": snapshot.get("run_id"),
                 "label": run_label(snapshot),
                 "timestamp": (snapshot.get("history_entry") or {}).get("timestamp", "-"),
-                "notes": (snapshot.get("history_entry") or {}).get("run_notes", ""),
+                "notes": clean_run_text((snapshot.get("history_entry") or {}).get("run_notes")),
             }
             for snapshot in snapshots
         ],
@@ -4942,6 +4956,8 @@ def restore_pro_run(tab, snapshot):
         "output",
     ]:
         tab[key] = deepcopy(snapshot.get(key))
+    tab["run_name"] = clean_run_text(tab.get("run_name"))
+    tab["run_notes"] = clean_run_text(tab.get("run_notes"))
     if tab.get("selected_threshold") is None:
         tab["selected_threshold"] = 0.5
     if tab.get("selected_calibration") is None:
@@ -5266,12 +5282,12 @@ def index():
             return Response("Invalid Pro run.", status=400, mimetype="text/plain")
         if tab_name not in PRO_TAB_NAMES:
             return Response("Unknown Pro tab.", status=404, mimetype="text/plain")
-        run_name = request.form.get("run_name", "").strip()[:120]
-        run_notes = request.form.get("run_notes", "").strip()[:2000]
+        run_name = clean_run_text(request.form.get("run_name"))[:120]
+        run_notes = clean_run_text(request.form.get("run_notes"))[:2000]
 
         def apply_notes(snapshot):
             entry = snapshot.setdefault("history_entry", {})
-            entry["run_name"] = run_name or entry.get("run_name") or f"Run {entry.get('timestamp', '')}".strip()
+            entry["run_name"] = run_name or clean_run_text(entry.get("run_name")) or default_run_name(entry.get("timestamp", ""))
             entry["run_notes"] = run_notes
             snapshot["run_name"] = entry["run_name"]
             snapshot["run_notes"] = run_notes
